@@ -1,5 +1,13 @@
 import SwiftUI
 
+// Temporary build probe: proves which branch the toolchain selected, rather
+// than letting a silent fallback look identical to success.
+#if compiler(>=6.2)
+#warning("PROBE: Liquid Glass branch compiled")
+#else
+#warning("PROBE: material fallback compiled — SDK has no glass APIs")
+#endif
+
 /// Liquid Glass surfaces, with a material fallback.
 ///
 /// The glass APIs arrived in the macOS 26 / iOS 26 SDK, so they are guarded

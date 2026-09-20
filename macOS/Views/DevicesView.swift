@@ -89,7 +89,7 @@ struct DeviceDetailView: View {
 
                     Section("Device Location") {
                         StatusRow(label: "Simulation Tool",
-                                  value: model.locationTooling.tool?.version ?? "pymobiledevice3 not installed",
+                                  value: model.locationTooling.displayName,
                                   state: model.locationTooling.tool == nil ? .warning : .good)
                         StatusRow(label: "Current Location",
                                   value: deviceLocationValue,

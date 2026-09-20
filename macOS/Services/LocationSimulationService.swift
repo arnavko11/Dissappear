@@ -17,12 +17,29 @@ struct LocationSimulationService {
     }
 
     enum Availability: Equatable {
+        /// Apple's own devicectl, when this Xcode's build supports location.
+        case deviceCtl(Tool)
         case ready(Tool)
         case notInstalled
 
         var tool: Tool? {
-            if case let .ready(tool) = self { return tool }
-            return nil
+            switch self {
+            case let .deviceCtl(tool), let .ready(tool): return tool
+            case .notInstalled: return nil
+            }
+        }
+
+        var usesAppleTooling: Bool {
+            if case .deviceCtl = self { return true }
+            return false
+        }
+
+        var displayName: String {
+            switch self {
+            case .deviceCtl: return "devicectl (Xcode)"
+            case let .ready(tool): return tool.version
+            case .notInstalled: return "pymobiledevice3 not installed"
+            }
         }
     }
 
@@ -48,6 +65,13 @@ struct LocationSimulationService {
     private let runner = ProcessRunner.shared
 
     func availability() async -> Availability {
+        // Prefer Apple's own tooling when this Xcode's devicectl offers
+        // location, so nothing extra needs installing. It is undocumented, so
+        // its help output is what decides.
+        if let deviceCtl = await deviceCtlLocationSupport() {
+            return .deviceCtl(deviceCtl)
+        }
+
         var searchPaths = Self.candidatePaths
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         searchPaths.append("\(home)/.local/bin/pymobiledevice3")
@@ -60,8 +84,24 @@ struct LocationSimulationService {
                            version: version?.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines) ?? "installed"))
     }
 
+    /// Reports devicectl's location support, if this Xcode has it.
+    private func deviceCtlLocationSupport() async -> Tool? {
+        guard let found = try? await runner.run("/usr/bin/xcrun", ["--find", "devicectl"]), found.succeeded else {
+            return nil
+        }
+        let path = found.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty,
+              let help = try? await runner.run(path, ["device", "--help"]), help.succeeded else { return nil }
+
+        let output = help.combinedOutput.lowercased()
+        guard output.contains("location") else { return nil }
+        return Tool(executablePath: path, version: "devicectl")
+    }
+
     /// Mounts the developer disk image if it is not mounted already.
     func prepare(tool: Tool, onOutputLine: @escaping @Sendable (String) -> Void) async throws {
+        guard tool.version != "devicectl" else { return }   // devicectl mounts on demand
+
         let result = try await runner.run(tool.executablePath, ["mounter", "auto-mount"], onOutputLine: onOutputLine)
         // Already-mounted is reported as a failure by some versions; that is fine.
         guard result.succeeded || result.combinedOutput.localizedCaseInsensitiveContains("already") else {
@@ -109,6 +149,12 @@ struct LocationSimulationService {
                                      tool: Tool,
                                      stage: String,
                                      onOutputLine: @escaping @Sendable (String) -> Void) async throws {
+        if tool.version == "devicectl" {
+            try await runDeviceCtlLocation(arguments, device: device, tool: tool,
+                                           stage: stage, onOutputLine: onOutputLine)
+            return
+        }
+
         let base = ["developer", "dvt", "simulate-location"]
 
         let direct = try await runner.run(tool.executablePath,
@@ -122,6 +168,42 @@ struct LocationSimulationService {
         if tunnelled.succeeded { return }
 
         throw Self.error(stage: stage, result: tunnelled, fallback: direct)
+    }
+
+    /// devicectl's location verbs, tried in the shapes Apple's CLI uses
+    /// elsewhere. Unsupported shapes fail harmlessly and the next is tried.
+    private func runDeviceCtlLocation(_ arguments: [String],
+                                      device: Device,
+                                      tool: Tool,
+                                      stage: String,
+                                      onOutputLine: @escaping @Sendable (String) -> Void) async throws {
+        let verb = arguments.first ?? "set"
+        let values = arguments.filter { $0 != verb && $0 != "--" }
+
+        var attempts: [[String]] = []
+        switch verb {
+        case "set" where values.count == 2:
+            attempts = [
+                ["device", "location", "set", "--device", device.udid,
+                 "--latitude", values[0], "--longitude", values[1]],
+                ["device", "location", "set", "--device", device.udid, values[0], values[1]]
+            ]
+        case "clear":
+            attempts = [["device", "location", "clear", "--device", device.udid]]
+        default:
+            attempts = [["device", "location", verb, "--device", device.udid] + values]
+        }
+
+        var last: ProcessResult?
+        for attempt in attempts {
+            let result = try await runner.run(tool.executablePath, attempt, onOutputLine: onOutputLine)
+            if result.succeeded { return }
+            last = result
+        }
+        throw Self.error(stage: stage, result: last ?? ProcessResult(command: "devicectl",
+                                                                     exitCode: 1,
+                                                                     standardOutput: "",
+                                                                     standardError: "devicectl rejected the location command."))
     }
 
     // MARK: - Errors
