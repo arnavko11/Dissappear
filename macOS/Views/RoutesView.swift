@@ -2,10 +2,47 @@ import SwiftUI
 
 struct RoutesView: View {
     @EnvironmentObject private var store: LibraryStore
+    @EnvironmentObject private var model: CompanionModel
     @State private var selection = Set<UUID>()
     @State private var isAdding = false
 
     var body: some View {
+        VStack(spacing: 0) {
+            table
+            Divider()
+            HStack(spacing: 10) {
+                StatusDot(state: model.deviceLocation == nil ? .inactive : .good)
+                Text(selectedRoute.map { "\($0.name) · \($0.waypoints.count) waypoints" }
+                     ?? "Select a route to replay on the device")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    guard let selectedRoute else { return }
+                    Task { await model.playRouteOnDevice(selectedRoute) }
+                } label: {
+                    Label("Play on Device", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedRoute == nil || !model.canSimulateDeviceLocation || model.isBusy)
+
+                Button {
+                    Task { await model.clearDeviceLocation() }
+                } label: {
+                    Label("Use Real Location", systemImage: "location.slash")
+                }
+                .disabled(!model.canSimulateDeviceLocation || model.isBusy)
+            }
+            .padding(12)
+        }
+    }
+
+    private var selectedRoute: SimulatedRoute? {
+        guard let id = selection.first else { return nil }
+        return store.library.routes.first { $0.id == id }
+    }
+
+    private var table: some View {
         Table(store.library.routes, selection: $selection) {
             TableColumn("Name") { Text($0.name) }
             TableColumn("Waypoints") { Text("\($0.waypoints.count)") }

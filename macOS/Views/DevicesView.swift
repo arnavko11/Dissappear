@@ -86,6 +86,23 @@ struct DeviceDetailView: View {
                                 .foregroundStyle(.orange)
                         }
                     }
+
+                    Section("Device Location") {
+                        StatusRow(label: "Simulation Tool",
+                                  value: model.locationTooling.tool?.version ?? "pymobiledevice3 not installed",
+                                  state: model.locationTooling.tool == nil ? .warning : .good)
+                        StatusRow(label: "Current Location",
+                                  value: deviceLocationValue,
+                                  state: model.deviceLocation == nil ? .inactive : .good)
+                        Button("Prepare Developer Services") {
+                            Task { await model.prepareDeviceForLocation() }
+                        }
+                        .disabled(model.locationTooling.tool == nil || model.isBusy)
+                        Text("Sets the location the whole device reports, through Apple's developer location service. Needs Developer Mode and a mounted developer disk image. Choose a location in Locations or a route in Routes.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+
                 }
                 .formStyle(.grouped)
 
@@ -141,6 +158,12 @@ struct DeviceDetailView: View {
                 .disabled(!model.isAppInstalled)
         }
         .disabled(model.isBusy)
+    }
+
+    private var deviceLocationValue: String {
+        guard let coordinate = model.deviceLocation else { return "Real location" }
+        let name = model.deviceLocationName.map { "\($0) · " } ?? ""
+        return name + String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude)
     }
 
     private var connectionDescription: String {

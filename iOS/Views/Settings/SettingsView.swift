@@ -67,6 +67,8 @@ struct SettingsView: View {
                 Text("Optional. Core Location access is only used to show your device's real position alongside simulated fixes.")
             }
 
+            RealLocationSection()
+
             AboutSection()
         }
         .navigationTitle("Settings")

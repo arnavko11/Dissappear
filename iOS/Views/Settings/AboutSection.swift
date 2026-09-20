@@ -1,5 +1,34 @@
 import SwiftUI
 
+/// Shows what Core Location actually reports, which is how you confirm a
+/// device-wide simulated location set from the macOS companion is in effect.
+struct RealLocationSection: View {
+    @Environment(LocationAuthorizationService.self) private var authorization
+
+    var body: some View {
+        Section {
+            if let location = authorization.realLocation {
+                LabeledContent("Latitude", value: String(format: "%.6f", location.coordinate.latitude))
+                LabeledContent("Longitude", value: String(format: "%.6f", location.coordinate.longitude))
+                LabeledContent("Accuracy", value: String(format: "%.0f m", location.horizontalAccuracy))
+                LabeledContent("Reported", value: location.timestamp.formatted(date: .omitted, time: .standard))
+            } else if authorization.isAuthorized {
+                Text("Waiting for a fix…").foregroundStyle(.secondary)
+            } else {
+                Button("Allow Location Access") { authorization.requestAuthorization() }
+            }
+        } header: {
+            Text("Device Location")
+        } footer: {
+            Text("What iOS reports to every app. If the macOS companion has set a simulated location, this shows it — that is how you tell the spoof is working. The in-app simulation on the Simulation tab does not change this.")
+        }
+        .task {
+            authorization.requestAuthorization()
+            authorization.startUpdates()
+        }
+    }
+}
+
 struct AboutSection: View {
     private let info = BuildInfo.current()
 

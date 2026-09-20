@@ -18,6 +18,10 @@ final class CompanionModel: ObservableObject {
     @Published var selectedTeamID: String?
     @Published private(set) var twoFactorContext: AppleIDAuthService.TwoFactorContext?
     @Published private(set) var isSigningIn = false
+    @Published private(set) var locationTooling: LocationSimulationService.Availability = .notInstalled
+    /// The coordinate currently pushed to the device, if this app set it.
+    @Published private(set) var deviceLocation: SimulatedCoordinate?
+    @Published private(set) var deviceLocationName: String?
     @Published var selectedDeviceID: Device.ID?
     @Published private(set) var identities: [SigningIdentity] = []
     @Published var selectedIdentityID: SigningIdentity.ID?
@@ -45,6 +49,7 @@ final class CompanionModel: ObservableObject {
     fileprivate let resignService = ResignService()
     fileprivate let appleIDAuth = AppleIDAuthService()
     fileprivate let freeProvisioning = FreeProvisioningService()
+    fileprivate let locationSimulation = LocationSimulationService()
     private let libraryStore: LibraryStore
 
     fileprivate var bundleIdentifier = "com.dissappear.testapp"
@@ -98,6 +103,7 @@ final class CompanionModel: ObservableObject {
         toolchain = await toolchainService.status()
         tools = await toolingService.availableTools()
         bundledBuildSize = bundledBuildService.version
+        locationTooling = await locationSimulation.availability()
         await refreshDevices()
         await refreshSigning()
         await refreshInstallationState()
@@ -616,6 +622,133 @@ extension CompanionModel {
                                    recommendedAction: "Choose a .mobileprovision file exported from your Apple developer account.",
                                    technicalDetails: url.path)
         }
+    }
+}
+
+// MARK: - Device location
+
+extension CompanionModel {
+    var canSimulateDeviceLocation: Bool {
+        locationTooling.tool != nil && selectedDevice != nil
+    }
+
+    /// Mounts the developer disk image so the location service is reachable.
+    func prepareDeviceForLocation() async {
+        guard !isBusy, let tool = locationTooling.tool else { return }
+        isBusy = true
+        activity = "Preparing developer services"
+        defer { isBusy = false; activity = nil }
+
+        do {
+            try await locationSimulation.prepare(tool: tool) { [weak self] line in
+                Task { @MainActor in self?.appendLog(line) }
+            }
+            appendLog("Developer disk image ready")
+        } catch let failure as CompanionError {
+            error = failure
+        } catch {
+            self.error = .generic("Preparing developer services failed", error)
+        }
+    }
+
+    /// Sets the location the whole device reports, using Apple's developer
+    /// location service. Every app on the phone sees it until it is cleared.
+    func setDeviceLocation(latitude: Double, longitude: Double, name: String?) async {
+        guard !isBusy, let device = selectedDevice else { return }
+        guard let tool = locationTooling.tool else {
+            error = CompanionError(title: "pymobiledevice3 Not Installed",
+                                   details: "Setting the device's location needs a client for Apple's developer services.",
+                                   recommendedAction: LocationSimulationService.installGuidance,
+                                   technicalDetails: "No pymobiledevice3 executable found in the usual locations")
+            return
+        }
+        isBusy = true
+        activity = "Setting location on \(device.name)"
+        defer { isBusy = false; activity = nil }
+
+        do {
+            try await locationSimulation.setLocation(latitude: latitude,
+                                                     longitude: longitude,
+                                                     device: device,
+                                                     tool: tool) { [weak self] line in
+                Task { @MainActor in self?.appendLog(line) }
+            }
+            deviceLocation = SimulatedCoordinate(latitude: latitude, longitude: longitude)
+            deviceLocationName = name
+            appendLog("Device location set to \(String(format: "%.5f, %.5f", latitude, longitude))")
+        } catch let failure as CompanionError {
+            error = failure
+        } catch {
+            self.error = .generic("Setting the device location failed", error)
+        }
+    }
+
+    func clearDeviceLocation() async {
+        guard !isBusy, let device = selectedDevice, let tool = locationTooling.tool else { return }
+        isBusy = true
+        activity = "Restoring real location on \(device.name)"
+        defer { isBusy = false; activity = nil }
+
+        do {
+            try await locationSimulation.clearLocation(device: device, tool: tool) { [weak self] line in
+                Task { @MainActor in self?.appendLog(line) }
+            }
+            deviceLocation = nil
+            deviceLocationName = nil
+            appendLog("Device returned to real location")
+        } catch let failure as CompanionError {
+            error = failure
+        } catch {
+            self.error = .generic("Clearing the device location failed", error)
+        }
+    }
+
+    /// Replays a saved route on the device by handing the service a GPX track.
+    func playRouteOnDevice(_ route: SimulatedRoute) async {
+        guard !isBusy, let device = selectedDevice, let tool = locationTooling.tool else { return }
+        guard route.waypoints.count > 1 else {
+            error = CompanionError(title: "Route Needs More Waypoints",
+                                   details: "A route needs at least two waypoints to replay.",
+                                   recommendedAction: "Add another waypoint in Routes.",
+                                   technicalDetails: "waypoints = \(route.waypoints.count)")
+            return
+        }
+        isBusy = true
+        activity = "Playing \(route.name) on \(device.name)"
+        defer { isBusy = false; activity = nil }
+
+        do {
+            let points = Self.densify(route: route)
+            let gpx = try GPXWriter.write(coordinates: points, name: route.name)
+            try await locationSimulation.playRoute(gpxURL: gpx, device: device, tool: tool) { [weak self] line in
+                Task { @MainActor in self?.appendLog(line) }
+            }
+            deviceLocationName = route.name
+            deviceLocation = points.last.map { SimulatedCoordinate(latitude: $0.latitude, longitude: $0.longitude) }
+        } catch let failure as CompanionError {
+            error = failure
+        } catch {
+            self.error = .generic("Playing the route failed", error)
+        }
+    }
+
+    /// One point per second of travel, so playback moves at the route's speed.
+    private static func densify(route: SimulatedRoute) -> [(latitude: Double, longitude: Double)] {
+        var points: [(latitude: Double, longitude: Double)] = []
+        let step = max(route.speed, 0.5)
+
+        for (start, end) in zip(route.waypoints, route.waypoints.dropFirst()) {
+            let distance = GeoMath.distance(start, end)
+            let count = max(1, Int(distance / step))
+            for index in 0..<count {
+                let coordinate = GeoMath.interpolate(start, end, fraction: Double(index) / Double(count))
+                points.append((coordinate.latitude, coordinate.longitude))
+            }
+        }
+        if let last = route.waypoints.last {
+            points.append((last.latitude, last.longitude))
+        }
+        return points
     }
 }
 
