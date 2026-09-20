@@ -59,15 +59,17 @@ struct SRPClient {
             digest = Data(digest.map { String(format: "%02x", $0) }.joined().utf8)
         }
 
+        let digestCount = digest.count
+        let saltCount = salt.count
         var derived = Data(count: 32)
         let status = derived.withUnsafeMutableBytes { derivedBytes in
             salt.withUnsafeBytes { saltBytes in
                 digest.withUnsafeBytes { passwordBytes in
                     CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2),
                                          passwordBytes.baseAddress?.assumingMemoryBound(to: CChar.self),
-                                         digest.count,
+                                         digestCount,
                                          saltBytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
-                                         salt.count,
+                                         saltCount,
                                          CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
                                          UInt32(iterations),
                                          derivedBytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
@@ -127,7 +129,10 @@ struct SRPClient {
         let iv = Data(HMAC<SHA256>.authenticationCode(for: Data("extra data iv:".utf8),
                                                       using: SymmetricKey(data: sessionKey))).prefix(16)
 
-        var output = Data(count: payload.count + kCCBlockSizeAES128)
+        let capacity = payload.count + kCCBlockSizeAES128
+        let keyCount = key.count
+        let payloadCount = payload.count
+        var output = Data(count: capacity)
         var moved = 0
         let status = output.withUnsafeMutableBytes { outputBytes in
             payload.withUnsafeBytes { payloadBytes in
@@ -136,10 +141,10 @@ struct SRPClient {
                         CCCrypt(CCOperation(kCCDecrypt),
                                 CCAlgorithm(kCCAlgorithmAES),
                                 CCOptions(kCCOptionPKCS7Padding),
-                                keyBytes.baseAddress, key.count,
+                                keyBytes.baseAddress, keyCount,
                                 ivBytes.baseAddress,
-                                payloadBytes.baseAddress, payload.count,
-                                outputBytes.baseAddress, output.count,
+                                payloadBytes.baseAddress, payloadCount,
+                                outputBytes.baseAddress, capacity,
                                 &moved)
                     }
                 }

@@ -19,9 +19,12 @@ struct AnisetteProvider {
             throw AppleIDError.anisetteUnavailable("AKAppleIDSession is not available on this version of macOS.")
         }
 
+        // Swift does not expose +alloc, so the allocation goes through the
+        // Objective-C runtime as well.
         let initSelector = NSSelectorFromString("initWithIdentifier:")
-        let allocated = sessionClass.alloc()
-        guard allocated.responds(to: initSelector),
+        guard let allocated = sessionClass.perform(NSSelectorFromString("alloc"))?
+                  .takeRetainedValue() as? NSObject,
+              allocated.responds(to: initSelector),
               let session = allocated.perform(initSelector, with: Self.xcodeSessionIdentifier)?
                   .takeUnretainedValue() as? NSObject else {
             throw AppleIDError.anisetteUnavailable("AKAppleIDSession could not be created.")

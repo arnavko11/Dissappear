@@ -42,6 +42,25 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             build 2>&1 | tee xcodebuild.log
 
+      - name: Error summary
+        if: failure()
+        run: |
+          grep -oE "[^ ]+\.swift:[0-9]+:[0-9]+: error: .*" xcodebuild.log \
+            | sed 's|/Users/runner/work/Dissappear/Dissappear/||' \
+            | sort -u > errors.txt || true
+          count=$(wc -l < errors.txt | tr -d ' ')
+          echo "::group::${{ matrix.scheme }}: $count source errors"
+          cat errors.txt
+          echo "::endgroup::"
+          {
+            echo "### ${{ matrix.scheme }}: $count source errors"
+            if [ "$count" -gt 0 ]; then
+              echo '```'
+              cat errors.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Warning summary
         if: always()
         run: |
