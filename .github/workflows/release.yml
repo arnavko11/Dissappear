@@ -86,6 +86,21 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             build
 
+      - name: Sign the companion for local use
+        run: |
+          set -euo pipefail
+          app="build-macos/Build/Products/Release/DissappearCompanion.app"
+
+          # Apple silicon refuses to execute a binary with no signature at all,
+          # so an unsigned build cannot launch on the machines this targets.
+          # An ad-hoc signature satisfies that; it is not a developer identity
+          # and does not make the app notarised.
+          codesign --force --deep --sign - --timestamp=none "$app"
+          codesign --verify --strict --verbose=2 "$app"
+          echo "::group::Signature"
+          codesign -dv --verbose=2 "$app" 2>&1 || true
+          echo "::endgroup::"
+
       - name: Package artifacts
         run: |
           set -euo pipefail
@@ -120,7 +135,7 @@ jobs:
           {
             printf 'Automated build of the Dissappear macOS companion and iOS test app.\n\n'
             printf '| Asset | Contents |\n| --- | --- |\n'
-            printf '| `DissappearCompanion-*-macOS.zip` | macOS companion, built unsigned. Right-click then Open on first launch, or sign it locally with your own identity. |\n'
+            printf '| `DissappearCompanion-*-macOS.zip` | macOS companion, ad-hoc signed so it runs on Apple silicon, but not notarised. After unzipping run: xattr -dr com.apple.quarantine DissappearCompanion.app |\n'
             printf '| `Dissappear-*-iOS-Simulator.zip` | iOS app built for the Simulator. Drag it onto a booted simulator to run. |\n'
             printf '| `Dissappear-*-iOS-unsigned.ipa` | iOS device build, unsigned. Install it by signing with your own Apple Development identity; the macOS companion builds, signs and installs it through Xcode tooling. |\n\n'
             printf 'Neither asset is distribution-signed. Device installs go through Apple standard development signing and provisioning.\n'
