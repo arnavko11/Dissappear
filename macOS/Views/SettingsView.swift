@@ -94,6 +94,12 @@ struct SettingsView: View {
                 if let address = model.controlServerAddress, let code = model.controlServerCode {
                     LabeledContent("Address", value: address)
                     LabeledContent("Pairing Code", value: code)
+                    StatusRow(label: "Sleep",
+                              value: model.isKeepingAwake ? "Staying awake" : "Normal",
+                              state: model.isKeepingAwake ? .good : .inactive)
+                    Text("Idle sleep is held off while a session is live. Closing the lid still sleeps the Mac unless it is plugged in with an external display, and this cannot stop sleep you ask for or a flat battery.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                     Text("Enter these in the iOS app under Remote. Keep this Mac awake and the device connected — the simulation lasts only while this app holds the session.")
                         .font(.callout)
                         .foregroundStyle(.secondary)

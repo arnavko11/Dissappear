@@ -26,6 +26,7 @@ final class CompanionModel: ObservableObject {
     fileprivate var locationSessionHandle: UUID?
     @Published private(set) var controlServerAddress: String?
     @Published private(set) var controlServerCode: String?
+    @Published private(set) var isKeepingAwake = false
     @Published var selectedDeviceID: Device.ID?
     @Published private(set) var identities: [SigningIdentity] = []
     @Published var selectedIdentityID: SigningIdentity.ID?
@@ -55,6 +56,7 @@ final class CompanionModel: ObservableObject {
     fileprivate let freeProvisioning = FreeProvisioningService()
     fileprivate let locationSimulation = LocationSimulationService()
     fileprivate let controlServer = ControlServer()
+    fileprivate let wakeAssertion = WakeAssertion()
     private let libraryStore: LibraryStore
 
     fileprivate var bundleIdentifier = "com.dissappear.testapp"
@@ -683,8 +685,10 @@ extension CompanionModel {
             }
             deviceLocation = SimulatedCoordinate(latitude: latitude, longitude: longitude)
             deviceLocationName = name
+            wakeAssertion.acquire(reason: WakeAssertion.Reason.locationSession)
+            isKeepingAwake = wakeAssertion.isActive
             appendLog("Device location set to \(String(format: "%.5f, %.5f", latitude, longitude))")
-            appendLog("Holding the session open — the simulation lasts while this stays connected.")
+            appendLog("Holding the session open and keeping this Mac awake.")
         } catch let failure as CompanionError {
             error = failure
         } catch {
@@ -708,6 +712,8 @@ extension CompanionModel {
             }
             deviceLocation = nil
             deviceLocationName = nil
+            wakeAssertion.release(reason: WakeAssertion.Reason.locationSession)
+            isKeepingAwake = wakeAssertion.isActive
             appendLog("Device returned to real location")
         } catch let failure as CompanionError {
             error = failure
@@ -783,6 +789,8 @@ extension CompanionModel {
             let host = ControlServer.localAddresses().first ?? "this Mac"
             controlServerAddress = "\(host):\(controlServer.port == 0 ? 8787 : controlServer.port)"
             controlServerCode = controlServer.pairingCode
+            wakeAssertion.acquire(reason: WakeAssertion.Reason.remoteControl)
+            isKeepingAwake = wakeAssertion.isActive
             appendLog("Remote control listening on \(controlServerAddress ?? "")")
         } catch {
             self.error = .generic("Remote control could not start", error,
@@ -794,6 +802,8 @@ extension CompanionModel {
         controlServer.stop()
         controlServerAddress = nil
         controlServerCode = nil
+        wakeAssertion.release(reason: WakeAssertion.Reason.remoteControl)
+        isKeepingAwake = wakeAssertion.isActive
         appendLog("Remote control stopped")
     }
 
