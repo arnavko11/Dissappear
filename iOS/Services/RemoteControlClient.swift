@@ -249,9 +249,12 @@ final class RemoteControlClient {
     }
 
     /// Reads until the peer closes, which the companion does after replying.
-    private static func receiveAll(_ connection: NWConnection,
-                                   buffer: Data,
-                                   completion: @escaping (Result<Data, Error>) -> Void) {
+    ///
+    /// Runs on the connection's queue, not the main actor: it is driven by
+    /// network callbacks.
+    private nonisolated static func receiveAll(_ connection: NWConnection,
+                                               buffer: Data,
+                                               completion: @escaping @Sendable (Result<Data, Error>) -> Void) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, isComplete, error in
             var accumulated = buffer
             if let data { accumulated.append(data) }

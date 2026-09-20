@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Browsing for the companion needs the service listed here. Xcode's
+	     INFOPLIST_KEY_ build settings cannot express an array, so this partial
+	     plist is merged with the generated one. -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_dissappear._tcp</string>
+	</array>
+</dict>
+</plist>
