@@ -25,26 +25,7 @@ struct SettingsView: View {
                 Button("Open Xcode") { model.openXcode() }
             }
 
-            Section("Project") {
-                LabeledContent("Xcode Project") {
-                    HStack {
-                        Text(model.configuration.projectPath.isEmpty ? "Not selected" : model.configuration.projectPath)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .foregroundStyle(model.configuration.isConfigured ? .primary : .secondary)
-                        Button("Choose…") { isChoosingProject = true }
-                    }
-                }
-                LabeledContent("Scheme", value: model.configuration.scheme)
-                LabeledContent("Configuration", value: model.configuration.configuration)
-                LabeledContent("Derived Data") {
-                    Text(model.configuration.derivedDataPath)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-
-            Section("Signing") {
+            Section {
                 Picker("Development Team", selection: $model.selectedIdentityID) {
                     if model.identities.isEmpty {
                         Text("No Apple Development identity").tag(Optional<String>.none)
@@ -54,9 +35,37 @@ struct SettingsView: View {
                     }
                 }
                 LabeledContent("Provisioning Profiles", value: "\(model.profiles.count) installed")
-                Text("Certificates, device registration and provisioning profiles are created and renewed by Xcode. This companion only reads them and passes your team to xcodebuild with automatic signing.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Signing")
+            } footer: {
+                Text("Apple issues certificates and profiles. This companion reads the ones already on this Mac, and can ask Apple for new ones from Build ▸ Apple ID Signing.")
+            }
+
+            Section {
+                if model.configuration.isConfigured {
+                    LabeledContent("Xcode Project") {
+                        HStack {
+                            Text(model.configuration.projectPath)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Button("Change…") { isChoosingProject = true }
+                        }
+                    }
+                    LabeledContent("Scheme", value: model.configuration.scheme)
+                    LabeledContent("Configuration", value: model.configuration.configuration)
+                    LabeledContent("Derived Data") {
+                        Text(model.configuration.derivedDataPath)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                } else {
+                    StatusRow(label: "Xcode Project", value: "Not needed", state: .inactive)
+                    Button("Choose a Project…") { isChoosingProject = true }
+                }
+            } header: {
+                Text("Build from Source (Optional)")
+            } footer: {
+                Text("Only for building the iOS app from its Xcode project. Installing the build bundled with this app does not use any of this — see Build ▸ Install Without Building.")
             }
 
             Section("About") {

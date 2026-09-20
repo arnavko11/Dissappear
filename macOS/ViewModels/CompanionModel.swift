@@ -238,11 +238,50 @@ final class CompanionModel: ObservableObject {
     }
 
     func refreshBuild() async {
-        await runWorkflow(launchWhenInstalled: false)
+        await install(launchWhenInstalled: false)
     }
 
     func reinstall() async {
-        await runWorkflow(launchWhenInstalled: true)
+        await install(launchWhenInstalled: true)
+    }
+
+    /// Picks whichever route can actually run, so Reinstall works whether or
+    /// not an Xcode project is set up. Building from source is only used when
+    /// a project has been chosen deliberately.
+    func install(launchWhenInstalled: Bool) async {
+        if configuration.isConfigured {
+            await runWorkflow(launchWhenInstalled: launchWhenInstalled)
+            return
+        }
+        if hasBundledBuild, isSignedInWithAppleID, selectedTeam != nil {
+            await installUsingAppleID(launchWhenInstalled: launchWhenInstalled)
+            return
+        }
+        if hasBundledBuild, selectedProfile != nil, selectedIdentity != nil {
+            await installBundledBuild(launchWhenInstalled: launchWhenInstalled)
+            return
+        }
+
+        error = CompanionError(title: "Nothing to Install Yet",
+                               details: missingRequirement,
+                               recommendedAction: "Open Build and either sign in under Apple ID Signing, or choose a provisioning profile under Install Without Building.",
+                               technicalDetails: """
+                               bundled build: \(hasBundledBuild ? "present" : "missing")
+                               Apple ID: \(isSignedInWithAppleID ? "signed in" : "signed out")
+                               identity: \(selectedIdentity?.commonName ?? "none")
+                               profile: \(selectedProfile?.name ?? "none")
+                               Xcode project: \(configuration.projectPath.isEmpty ? "not selected" : configuration.projectPath)
+                               """)
+    }
+
+    private var missingRequirement: String {
+        guard hasBundledBuild else {
+            return "This copy of the companion has no iOS build embedded, and no Xcode project is selected."
+        }
+        if selectedIdentity == nil {
+            return "The bundled build is ready, but no Apple Development certificate is available to sign it with."
+        }
+        return "The bundled build is ready, but it needs either an Apple ID sign-in or a provisioning profile before it can be signed."
     }
 
     func launchInstalledApp() async {
