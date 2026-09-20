@@ -22,6 +22,8 @@ final class CompanionModel: ObservableObject {
     /// The coordinate currently pushed to the device, if this app set it.
     @Published private(set) var deviceLocation: SimulatedCoordinate?
     @Published private(set) var deviceLocationName: String?
+    /// Held open for as long as the simulation should last.
+    fileprivate var locationSessionHandle: UUID?
     @Published var selectedDeviceID: Device.ID?
     @Published private(set) var identities: [SigningIdentity] = []
     @Published var selectedIdentityID: SigningIdentity.ID?
@@ -667,15 +669,19 @@ extension CompanionModel {
         defer { isBusy = false; activity = nil }
 
         do {
-            try await locationSimulation.setLocation(latitude: latitude,
-                                                     longitude: longitude,
-                                                     device: device,
-                                                     tool: tool) { [weak self] line in
+            if let existing = locationSessionHandle {
+                await locationSimulation.endSession(existing)
+            }
+            locationSessionHandle = try await locationSimulation.beginSession(latitude: latitude,
+                                                                              longitude: longitude,
+                                                                              device: device,
+                                                                              tool: tool) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }
             deviceLocation = SimulatedCoordinate(latitude: latitude, longitude: longitude)
             deviceLocationName = name
             appendLog("Device location set to \(String(format: "%.5f, %.5f", latitude, longitude))")
+            appendLog("Holding the session open — the simulation lasts while this stays connected.")
         } catch let failure as CompanionError {
             error = failure
         } catch {
@@ -690,6 +696,10 @@ extension CompanionModel {
         defer { isBusy = false; activity = nil }
 
         do {
+            if let handle = locationSessionHandle {
+                await locationSimulation.endSession(handle)
+                locationSessionHandle = nil
+            }
             try await locationSimulation.clearLocation(device: device, tool: tool) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }

@@ -109,17 +109,51 @@ struct LocationSimulationService {
         }
     }
 
-    func setLocation(latitude: Double,
-                     longitude: Double,
-                     device: Device,
-                     tool: Tool,
-                     onOutputLine: @escaping @Sendable (String) -> Void) async throws {
+    /// Starts a simulation session and returns its handle.
+    ///
+    /// The developer location tool does not exit after setting a location: it
+    /// holds the session open, and the simulation lasts as long as that session
+    /// does. So the process is kept running and stopped explicitly, rather than
+    /// waited on.
+    @discardableResult
+    func beginSession(latitude: Double,
+                      longitude: Double,
+                      device: Device,
+                      tool: Tool,
+                      onOutputLine: @escaping @Sendable (String) -> Void) async throws -> UUID {
         let coordinates = [String(format: "%.6f", latitude), String(format: "%.6f", longitude)]
-        try await runSimulateLocation(["set", "--"] + coordinates,
-                                      device: device,
-                                      tool: tool,
-                                      stage: "Setting the device location",
-                                      onOutputLine: onOutputLine)
+
+        if tool.version == "devicectl" {
+            try await runSimulateLocation(["set", "--"] + coordinates,
+                                          device: device,
+                                          tool: tool,
+                                          stage: "Setting the device location",
+                                          onOutputLine: onOutputLine)
+            return UUID()
+        }
+
+        let arguments = ["developer", "dvt", "simulate-location", "set", "--udid", device.udid, "--"] + coordinates
+        let handle = try await runner.start(tool.executablePath, arguments, onOutputLine: onOutputLine)
+
+        // Give it a moment to fail loudly, rather than reporting success for a
+        // session that died on launch.
+        try? await Task.sleep(for: .seconds(2))
+        if let status = await runner.exitStatus(handle), status != 0 {
+            await runner.stop(handle)
+            throw CompanionError(title: "Setting the device location failed",
+                                 details: "The developer location tool exited with code \(status).",
+                                 recommendedAction: Self.tunnelGuidance,
+                                 technicalDetails: "\(tool.executablePath) \(arguments.joined(separator: " "))")
+        }
+        return handle
+    }
+
+    func endSession(_ handle: UUID) async {
+        await runner.stop(handle)
+    }
+
+    func isSessionActive(_ handle: UUID) async -> Bool {
+        await runner.isRunning(handle)
     }
 
     func clearLocation(device: Device,

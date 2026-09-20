@@ -32,6 +32,9 @@ enum ProcessRunnerError: LocalizedError {
 actor ProcessRunner {
     static let shared = ProcessRunner()
 
+    /// Processes that hold a session open until explicitly stopped.
+    private var longRunning: [UUID: Process] = [:]
+
     private final class Buffer: @unchecked Sendable {
         private let lock = NSLock()
         private var storage = Data()
@@ -110,6 +113,47 @@ actor ProcessRunner {
                                                                               underlying: error.localizedDescription))
             }
         }
+    }
+
+    /// Starts a process that is expected to keep running, and returns a handle
+    /// for stopping it. Used for tools that hold a session open rather than
+    /// exiting, such as the developer location service.
+    func start(_ executable: String,
+               _ arguments: [String],
+               onOutputLine: (@Sendable (String) -> Void)? = nil) throws -> UUID {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        let accumulator = LineAccumulator(handler: onOutputLine)
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { return }
+            accumulator.consume(data)
+        }
+
+        try process.run()
+        let id = UUID()
+        longRunning[id] = process
+        return id
+    }
+
+    func isRunning(_ id: UUID) -> Bool {
+        longRunning[id]?.isRunning ?? false
+    }
+
+    /// Exit status of a process that has already finished, if it has.
+    func exitStatus(_ id: UUID) -> Int32? {
+        guard let process = longRunning[id], !process.isRunning else { return nil }
+        return process.terminationStatus
+    }
+
+    func stop(_ id: UUID) {
+        guard let process = longRunning.removeValue(forKey: id) else { return }
+        if process.isRunning { process.terminate() }
     }
 
     /// Convenience for tools resolved through `xcrun`.
