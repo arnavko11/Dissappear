@@ -39,9 +39,13 @@ struct AppleIDAuthService {
 
     func authenticate(appleID: String, password: String) async throws -> Outcome {
         var client = SRPClient(username: appleID)
-        let clientData = try anisette.clientProvidedData()
 
-        let initResponse = try await send(request: [
+        // One anisette set for the whole exchange: the one-time password and
+        // the machine identifier are only valid together.
+        let anisetteHeaders = try anisette.headers()
+        let clientData = anisette.clientProvidedData(from: anisetteHeaders)
+
+        let initResponse = try await send(headers: anisetteHeaders, request: [
             "A2k": client.publicKey,
             "cpd": clientData,
             "o": "init",
@@ -65,7 +69,7 @@ struct AppleIDAuthService {
                                                 serverPublicKey: serverPublicKey,
                                                 protocol: passwordProtocol)
 
-        let completeResponse = try await send(request: [
+        let completeResponse = try await send(headers: anisetteHeaders, request: [
             "c": cookie,
             "M1": proof,
             "cpd": clientData,
@@ -103,7 +107,8 @@ struct AppleIDAuthService {
                                                    idmsToken: idmsToken,
                                                    sessionKey: sessionKey,
                                                    cookie: checksumCookie,
-                                                   clientData: clientData)
+                                                   clientData: clientData,
+                                                   anisetteHeaders: anisetteHeaders)
         return .signedIn(Session(appleID: appleID, adsid: adsid, idmsToken: idmsToken, xcodeToken: xcodeToken))
     }
 
@@ -143,13 +148,14 @@ struct AppleIDAuthService {
                                  idmsToken: String,
                                  sessionKey: Data,
                                  cookie: Data,
-                                 clientData: [String: Any]) async throws -> String {
+                                 clientData: [String: Any],
+                                 anisetteHeaders: [String: String]) async throws -> String {
         let app = AnisetteProvider.xcodeSessionIdentifier
         let checksum = Data(HMAC<SHA256>.authenticationCode(
             for: Data("apptokens".utf8) + Data(adsid.utf8) + Data(app.utf8),
             using: SymmetricKey(data: sessionKey)))
 
-        let response = try await send(request: [
+        let response = try await send(headers: anisetteHeaders, request: [
             "app": [app],
             "c": cookie,
             "checksum": checksum,
@@ -170,13 +176,16 @@ struct AppleIDAuthService {
 
     // MARK: - Transport
 
-    private func send(request body: [String: Any]) async throws -> [String: Any] {
+    private func send(headers anisetteHeaders: [String: String],
+                      request body: [String: Any]) async throws -> [String: Any] {
         var urlRequest = URLRequest(url: AppleIDEndpoint.grandSlam)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
         urlRequest.setValue("*/*", forHTTPHeaderField: "Accept")
         urlRequest.setValue("akd/1.0 CFNetwork/1494.0.7 Darwin/23.4.0", forHTTPHeaderField: "User-Agent")
-        if let clientInfo = try? anisette.headers()["X-Mme-Client-Info"] {
+        // Must be the client info from the same generation as the anisette
+        // values in `cpd`, or Apple rejects the machine identifier.
+        if let clientInfo = anisetteHeaders["X-Mme-Client-Info"] {
             urlRequest.setValue(clientInfo, forHTTPHeaderField: "X-MMe-Client-Info")
         }
 

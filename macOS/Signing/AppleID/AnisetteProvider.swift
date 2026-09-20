@@ -42,8 +42,14 @@ struct AnisetteProvider {
     }
 
     /// The client-provided dictionary Apple expects alongside every request.
-    func clientProvidedData() throws -> [String: Any] {
-        var data: [String: Any] = try headers()
+    ///
+    /// Anisette values are a matched set: the one-time password in
+    /// `X-Apple-I-MD` is only valid with the machine identifier in
+    /// `X-Apple-I-MD-M` that was generated with it. Callers therefore generate
+    /// one set per sign-in and pass it here, rather than letting this method
+    /// mint a second, mismatched set.
+    func clientProvidedData(from headers: [String: String]) -> [String: Any] {
+        var data: [String: Any] = headers
         data["bootstrap"] = true
         data["icscrec"] = true
         data["pbe"] = false
