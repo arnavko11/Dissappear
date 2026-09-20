@@ -42,6 +42,12 @@ final class RemoteControlClient {
     private(set) var lastError: String?
     private(set) var isBusy = false
 
+    /// Set when a companion was discovered on the network, so no address is
+    /// needed. Typed host and port remain as a fallback.
+    var discovered: RemoteDiscovery.Companion? {
+        didSet { if discovered != nil { lastError = nil } }
+    }
+
     init() {
         host = UserDefaults.standard.string(forKey: "remoteHost") ?? ""
         port = UserDefaults.standard.string(forKey: "remotePort") ?? "8787"
@@ -53,7 +59,8 @@ final class RemoteControlClient {
     }
 
     var isConfigured: Bool {
-        !host.trimmingCharacters(in: .whitespaces).isEmpty && !pairingCode.isEmpty
+        guard !pairingCode.isEmpty else { return false }
+        return discovered != nil || !host.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     // MARK: - Calls
@@ -125,13 +132,20 @@ final class RemoteControlClient {
 
     private func send(method: String, path: String, body: Data?) async throws -> [String: Any] {
         let trimmedHost = host.trimmingCharacters(in: .whitespaces)
-        guard let portNumber = UInt16(port.trimmingCharacters(in: .whitespaces)),
-              let endpointPort = NWEndpoint.Port(rawValue: portNumber) else {
-            throw RemoteError(message: "That port is not valid.")
+
+        let endpoint: NWEndpoint
+        if let discovered {
+            endpoint = discovered.endpoint
+        } else {
+            guard let portNumber = UInt16(port.trimmingCharacters(in: .whitespaces)),
+                  let endpointPort = NWEndpoint.Port(rawValue: portNumber) else {
+                throw RemoteError(message: "That port is not valid.")
+            }
+            endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(trimmedHost), port: endpointPort)
         }
 
         var request = "\(method) \(path) HTTP/1.1\r\n"
-        request += "Host: \(trimmedHost)\r\n"
+        request += "Host: \(discovered?.name ?? trimmedHost)\r\n"
         request += "X-Pair-Code: \(pairingCode)\r\n"
         request += "Connection: close\r\n"
         if let body {
@@ -143,7 +157,7 @@ final class RemoteControlClient {
         var payload = Data(request.utf8)
         if let body { payload.append(body) }
 
-        let response = try await exchange(host: trimmedHost, port: endpointPort, payload: payload)
+        let response = try await exchange(endpoint: endpoint, payload: payload)
         guard let separator = response.range(of: Data("\r\n\r\n".utf8)) else {
             throw RemoteError(message: "The companion sent an unreadable reply.")
         }
@@ -158,8 +172,8 @@ final class RemoteControlClient {
         return json
     }
 
-    private func exchange(host: String, port: NWEndpoint.Port, payload: Data) async throws -> Data {
-        let connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: .tcp)
+    private func exchange(endpoint: NWEndpoint, payload: Data) async throws -> Data {
+        let connection = NWConnection(to: endpoint, using: .tcp)
 
         return try await withCheckedThrowingContinuation { continuation in
             let finished = Finished()

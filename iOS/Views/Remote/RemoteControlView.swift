@@ -5,11 +5,46 @@ import SwiftUI
 struct RemoteControlView: View {
     @Environment(RemoteControlClient.self) private var client
     @Environment(MainViewModel.self) private var main
+    @State private var discovery = RemoteDiscovery()
 
     var body: some View {
         @Bindable var client = client
 
         List {
+            Section {
+                if discovery.companions.isEmpty {
+                    HStack(spacing: 8) {
+                        if discovery.isBrowsing { ProgressView().controlSize(.small) }
+                        Text(discovery.isBrowsing ? "Looking for companions…" : "Not searching")
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    ForEach(discovery.companions) { companion in
+                        Button {
+                            client.discovered = companion
+                            Task { await client.refresh() }
+                        } label: {
+                            HStack {
+                                Label(companion.name, systemImage: "desktopcomputer")
+                                Spacer()
+                                if client.discovered == companion {
+                                    Image(systemName: "checkmark")
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(.tint)
+                                }
+                            }
+                        }
+                    }
+                }
+                if let failure = discovery.failure {
+                    InlineMessage(text: failure, tint: .orange)
+                }
+            } header: {
+                Text("Nearby")
+            } footer: {
+                Text("Companions announce themselves on the local network. Pick one, then enter its pairing code below.")
+            }
+
             Section {
                 LabeledContent("Address") {
                     TextField("192.168.1.10", text: $client.host)
@@ -99,7 +134,9 @@ struct RemoteControlView: View {
             if client.isBusy { ProgressView() }
         }
         .task {
+            discovery.start()
             if client.isConfigured { await client.refresh() }
         }
+        .onDisappear { discovery.stop() }
     }
 }

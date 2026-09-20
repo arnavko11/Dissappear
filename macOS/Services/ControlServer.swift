@@ -29,6 +29,9 @@ final class ControlServer: @unchecked Sendable {
     private var connections: [ObjectIdentifier: NWConnection] = [:]
     private let lock = NSLock()
 
+    /// Bonjour type the iOS app browses for, so neither end needs an address.
+    static let serviceType = "_dissappear._tcp"
+
     private(set) var pairingCode = ""
     private(set) var port: UInt16 = 0
 
@@ -72,6 +75,10 @@ final class ControlServer: @unchecked Sendable {
         parameters.includePeerToPeer = false
         let listener = try NWListener(using: parameters,
                                       on: NWEndpoint.Port(rawValue: preferredPort) ?? .any)
+
+        // Announce over Bonjour so the phone can find this Mac by itself.
+        listener.service = NWListener.Service(name: Host.current().localizedName ?? "Dissappear Companion",
+                                              type: Self.serviceType)
 
         listener.newConnectionHandler = { [weak self] connection in
             self?.accept(connection)
