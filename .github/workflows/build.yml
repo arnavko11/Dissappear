@@ -1,0 +1,43 @@
+name: Build
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.scheme }}
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scheme: DissappearCompanion
+            destination: platform=macOS
+          - scheme: Dissappear
+            destination: generic/platform=iOS Simulator
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: xcodebuild -version
+
+      - name: Build ${{ matrix.scheme }}
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Dissappear.xcodeproj \
+            -scheme "${{ matrix.scheme }}" \
+            -configuration Debug \
+            -destination "${{ matrix.destination }}" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
