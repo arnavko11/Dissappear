@@ -49,11 +49,16 @@ jobs:
             | sed 's|/Users/runner/work/Dissappear/Dissappear/||' \
             | sort -u > warnings.txt || true
           count=$(wc -l < warnings.txt | tr -d ' ')
-          echo "::group::${{ matrix.scheme }}: $count source warnings"
+          # Total includes toolchain warnings; it proves the log was captured
+          # so a zero source-warning count cannot be a silent false negative.
+          total=$(grep -c "warning:" xcodebuild.log || true)
+          lines=$(wc -l < xcodebuild.log | tr -d ' ')
+          echo "::group::${{ matrix.scheme }}: $count source warnings ($total warning lines in $lines log lines)"
           cat warnings.txt
           echo "::endgroup::"
           {
             echo "### ${{ matrix.scheme }}: $count source warnings"
+            echo "_$total total warning lines across $lines captured log lines._"
             if [ "$count" -gt 0 ]; then
               echo '```'
               cat warnings.txt
