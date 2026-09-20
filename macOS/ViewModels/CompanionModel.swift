@@ -12,6 +12,11 @@ final class CompanionModel: ObservableObject {
         didSet { Preferences.profilePath = profileURL?.path }
     }
     @Published private(set) var selectedProfile: ProvisioningProfile?
+    @Published private(set) var appleIDSession: AppleIDAuthService.Session?
+    @Published private(set) var teams: [DeveloperTeam] = []
+    @Published var selectedTeamID: String?
+    @Published private(set) var twoFactorContext: AppleIDAuthService.TwoFactorContext?
+    @Published private(set) var isSigningIn = false
     @Published var selectedDeviceID: Device.ID?
     @Published private(set) var identities: [SigningIdentity] = []
     @Published var selectedIdentityID: SigningIdentity.ID?
@@ -37,6 +42,8 @@ final class CompanionModel: ObservableObject {
     private let toolingService = DeviceToolingService()
     fileprivate let bundledBuildService = BundledBuildService()
     fileprivate let resignService = ResignService()
+    fileprivate let appleIDAuth = AppleIDAuthService()
+    fileprivate let freeProvisioning = FreeProvisioningService()
     private let libraryStore: LibraryStore
 
     fileprivate var bundleIdentifier = "com.dissappear.testapp"
@@ -462,10 +469,18 @@ extension CompanionModel {
     func installBundledBuild(launchWhenInstalled: Bool = true) async {
         guard !isBusy else { return }
         isBusy = true
-        stages = [:]
-        log = []
-        error = nil
         defer { isBusy = false; activity = nil }
+        await performBundledInstall(launchWhenInstalled: launchWhenInstalled)
+    }
+
+    /// Shared by the manual-profile path and the Apple ID path, which has
+    /// already set the identity and profile by the time it calls this.
+    fileprivate func performBundledInstall(launchWhenInstalled: Bool, resetState: Bool = true) async {
+        if resetState {
+            stages = [:]
+            log = []
+            error = nil
+        }
 
         do {
             let device = try requireDevice()
@@ -561,6 +576,138 @@ extension CompanionModel {
                                    recommendedAction: "Choose a .mobileprovision file exported from your Apple developer account.",
                                    technicalDetails: url.path)
         }
+    }
+}
+
+// MARK: - Apple ID signing
+
+extension CompanionModel {
+    var selectedTeam: DeveloperTeam? {
+        teams.first { $0.id == selectedTeamID } ?? teams.first
+    }
+
+    var isSignedInWithAppleID: Bool { appleIDSession != nil }
+
+    var needsVerificationCode: Bool { twoFactorContext != nil }
+
+    /// Signs in with an Apple ID. The password is passed straight through to
+    /// the SRP exchange and is never stored by this app.
+    func signInWithAppleID(appleID: String, password: String) async {
+        isSigningIn = true
+        error = nil
+        defer { isSigningIn = false }
+
+        do {
+            switch try await appleIDAuth.authenticate(appleID: appleID, password: password) {
+            case let .signedIn(session):
+                appleIDSession = session
+                twoFactorContext = nil
+                AppleIDTokenStore.save(session)
+                await loadTeams()
+            case let .twoFactorRequired(context):
+                twoFactorContext = context
+                appendLog("A verification code was sent to your trusted devices.")
+            }
+        } catch {
+            self.error = Self.companionError(from: error)
+        }
+    }
+
+    func submitVerificationCode(_ code: String, password: String) async {
+        guard let context = twoFactorContext else { return }
+        isSigningIn = true
+        error = nil
+        defer { isSigningIn = false }
+
+        do {
+            let session = try await appleIDAuth.submitVerificationCode(code, context: context, password: password)
+            appleIDSession = session
+            twoFactorContext = nil
+            AppleIDTokenStore.save(session)
+            await loadTeams()
+        } catch {
+            self.error = Self.companionError(from: error)
+        }
+    }
+
+    func signOutOfAppleID() {
+        if let session = appleIDSession {
+            AppleIDTokenStore.clear(appleID: session.appleID)
+        }
+        appleIDSession = nil
+        twoFactorContext = nil
+        teams = []
+        selectedTeamID = nil
+    }
+
+    func restoreAppleIDSession(appleID: String) async {
+        guard let stored = AppleIDTokenStore.load(appleID: appleID) else { return }
+        appleIDSession = stored
+        await loadTeams()
+    }
+
+    func loadTeams() async {
+        guard let session = appleIDSession else { return }
+        do {
+            let loaded = try await DeveloperServicesClient(session: session).listTeams()
+            teams = loaded
+            if selectedTeamID == nil || !loaded.contains(where: { $0.id == selectedTeamID }) {
+                selectedTeamID = loaded.first?.id
+            }
+        } catch {
+            self.error = Self.companionError(from: error)
+        }
+    }
+
+    /// Registers the device, obtains a certificate and profile from Apple, then
+    /// signs and installs the bundled build — no Xcode project involved.
+    func installUsingAppleID(launchWhenInstalled: Bool = true) async {
+        guard !isBusy else { return }
+        isBusy = true
+        stages = [:]
+        log = []
+        error = nil
+        defer { isBusy = false; activity = nil }
+
+        do {
+            let device = try requireDevice()
+            guard let session = appleIDSession else { throw AppleIDError.notSignedIn }
+            guard let team = selectedTeam else {
+                throw AppleIDError.protocolFailure("No development team is available for this Apple ID.")
+            }
+
+            stages[.identity] = .running
+            activity = "Preparing signing with Apple ID"
+            let result = try await freeProvisioning.provision(session: session,
+                                                              team: team,
+                                                              device: device,
+                                                              baseBundleIdentifier: "com.dissappear.testapp") { [weak self] line in
+                Task { @MainActor in self?.appendLog(line) }
+            }
+
+            await refreshSigning()
+            selectedIdentityID = result.identity.id
+            profileURL = result.profileURL
+            selectedProfile = result.profile
+            stages[.identity] = .succeeded("\(result.identity.commonName) · \(team.name)")
+
+            await performBundledInstall(launchWhenInstalled: launchWhenInstalled, resetState: false)
+        } catch {
+            self.error = Self.companionError(from: error)
+            appendLog("✗ \(self.error?.title ?? "Failed")")
+        }
+    }
+
+    fileprivate static func companionError(from error: Error) -> CompanionError {
+        if let failure = error as? CompanionError { return failure }
+        if let failure = error as? AppleIDError {
+            return CompanionError(title: "Apple ID Sign-In Failed",
+                                  details: failure.errorDescription ?? "Apple rejected the request.",
+                                  recommendedAction: failure.recoverySuggestion
+                                      ?? "Check the details below, then try again.",
+                                  technicalDetails: String(describing: failure))
+        }
+        return .generic("Apple ID Sign-In Failed", error, action: "Check your network connection and try again.")
     }
 }
 

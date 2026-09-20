@@ -4,10 +4,39 @@ import UniformTypeIdentifiers
 struct BuildView: View {
     @EnvironmentObject private var model: CompanionModel
     @State private var isChoosingProfile = false
+    @State private var isSigningIn = false
 
     var body: some View {
         VStack(spacing: 0) {
             Form {
+                Section {
+                    if let session = model.appleIDSession {
+                        StatusRow(label: "Apple ID", value: session.appleID, state: .good)
+                        Picker("Team", selection: $model.selectedTeamID) {
+                            ForEach(model.teams) { team in
+                                Text("\(team.name) (\(team.id))").tag(Optional(team.id))
+                            }
+                        }
+                        Button {
+                            Task { await model.installUsingAppleID() }
+                        } label: {
+                            Label("Sign & Install with Apple ID", systemImage: "person.badge.key")
+                        }
+                        .disabled(model.isBusy || !model.hasBundledBuild || model.selectedDevice == nil || model.teams.isEmpty)
+                        Button("Sign Out") { model.signOutOfAppleID() }
+                    } else {
+                        Label("Sign in so Apple can issue a development certificate and profile for this Mac — the same thing Xcode's Accounts pane does.",
+                              systemImage: "person.badge.key")
+                            .foregroundStyle(.secondary)
+                        Button("Sign In with Apple ID…") { isSigningIn = true }
+                            .disabled(model.isBusy)
+                    }
+                } header: {
+                    Text("Apple ID Signing")
+                } footer: {
+                    Text("Registers this device with your team, requests a development certificate, creates the App ID and downloads the profile, then signs and installs the bundled build. Your password is used only for Apple's secure remote password exchange and is never stored. A free Apple ID gives a 7-day signature and a limited number of App IDs.")
+                }
+
                 Section("Signing") {
                     Picker("Development Team", selection: $model.selectedIdentityID) {
                         if model.identities.isEmpty {
@@ -104,6 +133,10 @@ struct BuildView: View {
                     Button("Open Xcode") { model.openXcode() }
                 } label: { Label("More", systemImage: "ellipsis.circle") }
             }
+        }
+        .sheet(isPresented: $isSigningIn) {
+            AppleIDSignInView()
+                .environmentObject(model)
         }
         .fileImporter(isPresented: $isChoosingProfile,
                       allowedContentTypes: [UTType(filenameExtension: "mobileprovision") ?? .data, .data]) { result in
