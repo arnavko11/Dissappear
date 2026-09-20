@@ -58,26 +58,73 @@ The companion detects and explains, rather than working around:
 - Device not registered in a provisioning profile
 - Locked device during install
 
-## iOS test app
+## iOS app — Location Tester
 
-Three tabs: **Simulation** (run a scenario and watch the simulated fix on a map),
-**Library** (locations, routes, scenarios embedded in the build) and **Build**
-(bundle identifier, profile, team, expiration, days remaining).
+A native SwiftUI location-testing tool for developers. All simulation happens
+inside this app's own testing surfaces: it does not hook into Core Location's
+system providers, does not modify system location services, and never changes
+what any other app receives.
 
-The simulation engine (`iOS/Simulation/SimulationEngine.swift`) is self-contained:
-it produces fixes for this app's own testing surfaces only. It does not hook into
-Core Location's system providers and does not alter location delivered to any
-other app. `SystemLocationProvider` uses standard Core Location with the normal
-authorization prompt for side-by-side comparison.
+**Map-first workspace.** A MapKit map fills the content area (standard, hybrid
+or satellite, with zoom and recentre controls). On iPad it sits in a
+`NavigationSplitView` beside the library; on iPhone the library is a detented
+sheet. A persistent bottom bar shows the current simulated coordinate and the
+transport controls.
+
+**Locations.** Search addresses, businesses, cities and landmarks with
+`MKLocalSearchCompleter` (debounced, updating as you type), enter a coordinate
+directly in the search field or the manual latitude/longitude fields, or drop a
+pin on the map (reverse geocoded for a readable name). Selected places show
+name, address and coordinate with **Set Test Location**, **Save** and **Add
+Waypoint** actions. Saved locations support favourites and deletion.
+
+**Routes.** Add waypoints from the map or from saved locations, reorder by
+dragging, delete, move a waypoint by selecting it and tapping the map, reverse,
+clear, and set base speed and looping. Routes show waypoint count, total
+distance and estimated duration, drawn as a polyline with numbered waypoints.
+
+**Simulation.** `SimulationEngine` interpolates along the route at 5–60 Hz with
+start, pause, resume, stop and restart, and 0.25× to 10× speed. Progress,
+remaining distance and estimated time remaining update live; the marker
+animates between fixes unless Reduce Motion is on.
+
+**Scenarios.** Pair a route with a speed for a repeatable run — create, edit,
+rename, duplicate, delete and run.
+
+**Session state.** A compact indicator reports Disconnected, Connecting,
+Connected, Simulation Running, Simulation Paused or Error using a symbol and
+text, never colour alone. **Reset Test Environment** returns everything to the
+default state.
+
+**Persistence.** SwiftData stores saved locations, routes, waypoints and
+scenarios; preferences (map style, default speed, units, appearance, update
+frequency, marker animation) live in `@AppStorage`. On first launch the library
+prepared by the macOS companion and embedded in the build is imported.
+
+**Settings.** General (default map style, default speed, distance units),
+Appearance (system/light/dark), Simulation (update frequency, marker
+animation), Real Location (Core Location authorization, optional) and About
+(version, build, provisioning profile and days remaining).
+
+Accessibility: Dynamic Type throughout, VoiceOver labels/values/hints on the
+map, transport and rows, Reduce Motion respected, and hardware-keyboard support
+for the transport controls.
 
 ## Layout
 
 ```
-Shared/                     SimulationModels.swift (both targets)
-iOS/       App/ Views/ Simulation/ Models/ Resources/
+Shared/    SimulationModels.swift (both targets)
+iOS/       App/ Models/ Services/ ViewModels/ Components/ Resources/
+           Views/MainWindow Views/Sidebar Views/Map Views/Locations
+           Views/Routes Views/Scenarios Views/SimulationControls Views/Settings
 macOS/     App/ Views/ ViewModels/ Services/ Models/
            Signing/ Devices/ Build/ Installation/ Utilities/
 ```
+
+The iOS app follows MVVM: SwiftData models, services (`SimulationEngine`,
+`LocationSearchService`, `PersistenceService`, `LocationAuthorizationService`),
+`@Observable` view models, and small views that only read state and call
+intents.
 
 `Services/` holds `ToolchainService`, `DeviceService`, `SigningService`,
 `BuildService` and `InstallationService`. `CompanionModel` sequences them into
