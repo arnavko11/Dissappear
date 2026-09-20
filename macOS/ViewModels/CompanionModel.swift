@@ -24,6 +24,9 @@ final class CompanionModel: ObservableObject {
     @Published private(set) var deviceLocationName: String?
     /// Held open for as long as the simulation should last.
     fileprivate var locationSessionHandle: UUID?
+    fileprivate var locationSessionMonitor: Task<Void, Never>?
+    /// Set when a live session stopped on its own, so the phone can say why.
+    @Published private(set) var sessionLostReason: String?
     @Published private(set) var controlServerAddress: String?
     @Published private(set) var controlServerCode: String?
     @Published private(set) var isKeepingAwake = false
@@ -688,6 +691,8 @@ extension CompanionModel {
             }
             deviceLocation = SimulatedCoordinate(latitude: latitude, longitude: longitude)
             deviceLocationName = name
+            sessionLostReason = nil
+            monitorLocationSession()
             wakeAssertion.acquire(reason: WakeAssertion.Reason.locationSession)
             isKeepingAwake = wakeAssertion.isActive
             appendLog("Device location set to \(String(format: "%.5f, %.5f", latitude, longitude))")
@@ -699,6 +704,34 @@ extension CompanionModel {
         }
     }
 
+    /// Watches the held session so a simulation that dies — the device
+    /// unplugged, the Mac slept, the tool crashed — is reported rather than
+    /// leaving the UI claiming a location that is no longer set.
+    private func monitorLocationSession() {
+        locationSessionMonitor?.cancel()
+        guard let handle = locationSessionHandle else { return }
+
+        locationSessionMonitor = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard let self, !Task.isCancelled else { return }
+                guard self.locationSessionHandle == handle else { return }
+                if await self.locationSimulation.isSessionActive(handle) { continue }
+
+                self.locationSessionHandle = nil
+                self.deviceLocation = nil
+                self.sessionLostReason = """
+                The simulation stopped. The device may have been unplugged, or the \
+                developer tunnel closed.
+                """
+                self.wakeAssertion.release(reason: WakeAssertion.Reason.locationSession)
+                self.isKeepingAwake = self.wakeAssertion.isActive
+                self.appendLog("✗ Location session ended unexpectedly")
+                return
+            }
+        }
+    }
+
     func clearDeviceLocation() async {
         guard !isBusy, let device = selectedDevice, let tool = locationTooling.tool else { return }
         isBusy = true
@@ -706,6 +739,9 @@ extension CompanionModel {
         defer { isBusy = false; activity = nil }
 
         do {
+            locationSessionMonitor?.cancel()
+            locationSessionMonitor = nil
+            sessionLostReason = nil
             if let handle = locationSessionHandle {
                 await locationSimulation.endSession(handle)
                 locationSessionHandle = nil
@@ -820,7 +856,8 @@ extension CompanionModel {
                 "latitude": deviceLocation?.latitude ?? 0,
                 "longitude": deviceLocation?.longitude ?? 0,
                 "name": deviceLocationName ?? "",
-                "ready": canSimulateDeviceLocation
+                "ready": canSimulateDeviceLocation,
+                "sessionLost": sessionLostReason ?? ""
             ])
 
         case ("GET", "/locations"):

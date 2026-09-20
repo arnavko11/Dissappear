@@ -18,6 +18,15 @@ final class RemoteControlClient {
         var longitude: Double
         var name: String
         var ready: Bool
+        /// Non-empty when the companion's session ended on its own.
+        var sessionLost: String
+    }
+
+    /// Why the last attempt failed, kept apart so the UI can tell "the Mac is
+    /// unreachable" from "the Mac is there and the session died".
+    enum Trouble: Equatable {
+        case unreachable(String)
+        case refused(String)
     }
 
     struct SavedPlace: Identifiable, Equatable {
@@ -40,7 +49,10 @@ final class RemoteControlClient {
     private(set) var status: Status?
     private(set) var places: [SavedPlace] = []
     private(set) var lastError: String?
+    private(set) var trouble: Trouble?
     private(set) var isBusy = false
+    /// Remembered so a lost session can be re-applied in one tap.
+    private(set) var lastSent: (latitude: Double, longitude: Double, name: String?)?
 
     /// Set when a companion was discovered on the network, so no address is
     /// needed. Typed host and port remain as a fallback.
@@ -77,7 +89,8 @@ final class RemoteControlClient {
                             latitude: statusPayload["latitude"] as? Double ?? 0,
                             longitude: statusPayload["longitude"] as? Double ?? 0,
                             name: statusPayload["name"] as? String ?? "",
-                            ready: statusPayload["ready"] as? Bool ?? false)
+                            ready: statusPayload["ready"] as? Bool ?? false,
+                            sessionLost: statusPayload["sessionLost"] as? String ?? "")
 
             let placesPayload = try await send(method: "GET", path: "/locations", body: nil)
             places = (placesPayload["locations"] as? [[String: Any]] ?? []).compactMap { entry in
@@ -87,9 +100,22 @@ final class RemoteControlClient {
                 return SavedPlace(name: name, latitude: latitude, longitude: longitude)
             }
             lastError = nil
+            trouble = nil
         } catch {
-            lastError = (error as? RemoteError)?.message ?? error.localizedDescription
+            record(error)
         }
+    }
+
+    /// Re-sends the last coordinate, for when the companion lost its session.
+    func reapplyLastLocation() async {
+        guard let lastSent else { return }
+        await setLocation(latitude: lastSent.latitude, longitude: lastSent.longitude, name: lastSent.name)
+    }
+
+    private func record(_ error: Error) {
+        let message = (error as? RemoteError)?.message ?? error.localizedDescription
+        lastError = message
+        trouble = (error as? RemoteError)?.isReachability == true ? .unreachable(message) : .refused(message)
     }
 
     func setLocation(latitude: Double, longitude: Double, name: String?) async {
@@ -104,9 +130,11 @@ final class RemoteControlClient {
             _ = try await send(method: "POST", path: "/location",
                                body: try JSONSerialization.data(withJSONObject: payload))
             lastError = nil
+            trouble = nil
+            lastSent = (latitude, longitude, name)
             await refresh()
         } catch {
-            lastError = (error as? RemoteError)?.message ?? error.localizedDescription
+            record(error)
         }
     }
 
@@ -118,9 +146,11 @@ final class RemoteControlClient {
         do {
             _ = try await send(method: "POST", path: "/clear", body: nil)
             lastError = nil
+            trouble = nil
+            lastSent = nil
             await refresh()
         } catch {
-            lastError = (error as? RemoteError)?.message ?? error.localizedDescription
+            record(error)
         }
     }
 
@@ -128,6 +158,9 @@ final class RemoteControlClient {
 
     struct RemoteError: Error {
         var message: String
+        /// True when the companion could not be reached at all, as opposed to
+        /// reached and refusing.
+        var isReachability = false
     }
 
     private func send(method: String, path: String, body: Data?) async throws -> [String: Any] {
@@ -199,11 +232,13 @@ final class RemoteControlClient {
                     if finished.claim() {
                         connection.cancel()
                         continuation.resume(throwing: RemoteError(
-                            message: "Could not reach the companion. \(error.localizedDescription)"))
+                            message: "Could not reach the companion. \(error.localizedDescription)",
+                            isReachability: true))
                     }
                 case .cancelled:
                     if finished.claim() {
-                        continuation.resume(throwing: RemoteError(message: "The connection closed."))
+                        continuation.resume(throwing: RemoteError(message: "The connection closed.",
+                                                                  isReachability: true))
                     }
                 default:
                     break

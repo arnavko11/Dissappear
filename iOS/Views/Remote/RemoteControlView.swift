@@ -71,9 +71,36 @@ struct RemoteControlView: View {
                 Text("Shown in the macOS companion under Settings ▸ Remote Control. Nearby discovery works on the same network; away from home, use the address the companion shows for your mesh VPN.")
             }
 
-            if let error = client.lastError {
+            if let trouble = client.trouble {
                 Section {
-                    InlineMessage(text: error, tint: .orange)
+                    switch trouble {
+                    case let .unreachable(message):
+                        InlineMessage(text: "Cannot reach the companion. \(message)",
+                                      systemImage: "wifi.exclamationmark", tint: .orange)
+                        Text("The Mac may be asleep or off this network. Simulation stops when the companion does.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    case let .refused(message):
+                        InlineMessage(text: message, systemImage: "exclamationmark.circle", tint: .orange)
+                    }
+                    Button("Try Again") { Task { await client.refresh() } }
+                }
+            }
+
+            if let status = client.status, !status.sessionLost.isEmpty {
+                Section {
+                    InlineMessage(text: status.sessionLost,
+                                  systemImage: "bolt.horizontal.circle", tint: .orange)
+                    if client.lastSent != nil {
+                        Button {
+                            Task { await client.reapplyLastLocation() }
+                        } label: {
+                            Label("Re-apply Last Location", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(client.isBusy)
+                    }
+                } header: {
+                    Text("Session Lost")
                 }
             }
 
@@ -135,7 +162,12 @@ struct RemoteControlView: View {
         }
         .task {
             discovery.start()
-            if client.isConfigured { await client.refresh() }
+            // Keep the picture current: a session can die while the phone is
+            // in a pocket, and silence would read as everything being fine.
+            while !Task.isCancelled {
+                if client.isConfigured { await client.refresh() }
+                try? await Task.sleep(for: .seconds(5))
+            }
         }
         .onDisappear { discovery.stop() }
     }
