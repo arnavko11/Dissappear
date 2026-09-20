@@ -13,6 +13,7 @@ struct DissappearApp: App {
     @State private var searchService = LocationSearchService()
     @State private var routeEditor = RouteEditorViewModel()
     @State private var authorization = LocationAuthorizationService()
+    @State private var remoteControl = RemoteControlClient()
 
     private let container: ModelContainer
 
@@ -32,6 +33,7 @@ struct DissappearApp: App {
                 .environment(searchService)
                 .environment(routeEditor)
                 .environment(authorization)
+                .environment(remoteControl)
                 .preferredColorScheme(AppearanceOption(rawValue: appearanceRaw)?.colorScheme)
                 .task {
                     engine.speedMultiplier = defaultSpeed

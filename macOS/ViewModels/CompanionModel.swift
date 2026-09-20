@@ -24,6 +24,8 @@ final class CompanionModel: ObservableObject {
     @Published private(set) var deviceLocationName: String?
     /// Held open for as long as the simulation should last.
     fileprivate var locationSessionHandle: UUID?
+    @Published private(set) var controlServerAddress: String?
+    @Published private(set) var controlServerCode: String?
     @Published var selectedDeviceID: Device.ID?
     @Published private(set) var identities: [SigningIdentity] = []
     @Published var selectedIdentityID: SigningIdentity.ID?
@@ -52,6 +54,7 @@ final class CompanionModel: ObservableObject {
     fileprivate let appleIDAuth = AppleIDAuthService()
     fileprivate let freeProvisioning = FreeProvisioningService()
     fileprivate let locationSimulation = LocationSimulationService()
+    fileprivate let controlServer = ControlServer()
     private let libraryStore: LibraryStore
 
     fileprivate var bundleIdentifier = "com.dissappear.testapp"
@@ -759,6 +762,85 @@ extension CompanionModel {
             points.append((last.latitude, last.longitude))
         }
         return points
+    }
+}
+
+// MARK: - Remote control
+
+extension CompanionModel {
+    var isControlServerRunning: Bool { controlServerAddress != nil }
+
+    var libraryLocations: [SimulatedLocation] { libraryStore.library.locations }
+
+    /// Lets the iOS app steer the simulated location over the local network,
+    /// so the Mac can stay put while holding the developer session.
+    func startControlServer() {
+        controlServer.handler = { [weak self] request in
+            await self?.handleControlRequest(request) ?? .error(503, "Not ready.")
+        }
+        do {
+            try controlServer.start()
+            let host = ControlServer.localAddresses().first ?? "this Mac"
+            controlServerAddress = "\(host):\(controlServer.port == 0 ? 8787 : controlServer.port)"
+            controlServerCode = controlServer.pairingCode
+            appendLog("Remote control listening on \(controlServerAddress ?? "")")
+        } catch {
+            self.error = .generic("Remote control could not start", error,
+                                  action: "Another app may be using the port. Try again.")
+        }
+    }
+
+    func stopControlServer() {
+        controlServer.stop()
+        controlServerAddress = nil
+        controlServerCode = nil
+        appendLog("Remote control stopped")
+    }
+
+    private func handleControlRequest(_ request: ControlServer.Request) async -> ControlServer.Response {
+        switch (request.method, request.path) {
+        case ("GET", "/status"):
+            return .ok([
+                "device": selectedDevice?.name ?? "",
+                "simulating": deviceLocation != nil,
+                "latitude": deviceLocation?.latitude ?? 0,
+                "longitude": deviceLocation?.longitude ?? 0,
+                "name": deviceLocationName ?? "",
+                "ready": canSimulateDeviceLocation
+            ])
+
+        case ("GET", "/locations"):
+            let locations = libraryLocations.map {
+                ["name": $0.name, "latitude": $0.coordinate.latitude, "longitude": $0.coordinate.longitude]
+            }
+            return .ok(["locations": locations])
+
+        case ("POST", "/location"):
+            guard let payload = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+                  let latitude = payload["latitude"] as? Double,
+                  let longitude = payload["longitude"] as? Double else {
+                return .error(400, "Expected latitude and longitude.")
+            }
+            guard (-90...90).contains(latitude), (-180...180).contains(longitude) else {
+                return .error(400, "That coordinate is out of range.")
+            }
+            await setDeviceLocation(latitude: latitude, longitude: longitude,
+                                    name: payload["name"] as? String)
+            if let failure = error {
+                return .error(500, failure.details)
+            }
+            return .ok(["simulating": true, "latitude": latitude, "longitude": longitude])
+
+        case ("POST", "/clear"):
+            await clearDeviceLocation()
+            if let failure = error {
+                return .error(500, failure.details)
+            }
+            return .ok(["simulating": false])
+
+        default:
+            return .error(404, "Unknown request.")
+        }
     }
 }
 

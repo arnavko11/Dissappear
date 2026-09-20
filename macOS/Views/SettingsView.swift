@@ -86,6 +86,24 @@ struct SettingsView: View {
                 Text("Only for building the iOS app from its Xcode project. Installing the build bundled with this app does not use any of this — see Build ▸ Install Without Building.")
             }
 
+            Section {
+                Toggle("Allow control from iPhone", isOn: Binding(
+                    get: { model.isControlServerRunning },
+                    set: { $0 ? model.startControlServer() : model.stopControlServer() }))
+
+                if let address = model.controlServerAddress, let code = model.controlServerCode {
+                    LabeledContent("Address", value: address)
+                    LabeledContent("Pairing Code", value: code)
+                    Text("Enter these in the iOS app under Remote. Keep this Mac awake and the device connected — the simulation lasts only while this app holds the session.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Remote Control")
+            } footer: {
+                Text("Serves the location controls to your iPhone over the local network, so the Mac can stay put while you move. Requests must carry the pairing code, and nothing else is exposed.")
+            }
+
             Section("About") {
                 LabeledContent("Version", value: Self.version)
                 LabeledContent("Build", value: Self.build)

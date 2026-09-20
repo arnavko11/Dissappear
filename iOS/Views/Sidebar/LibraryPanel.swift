@@ -29,6 +29,7 @@ struct LibraryPanel: View {
                     case .saved: SavedLocationsPanel()
                     case .routes: RoutesPanel()
                     case .scenarios: ScenariosPanel()
+                    case .remote: RemoteControlView()
                     }
                 }
                 .transition(.opacity)

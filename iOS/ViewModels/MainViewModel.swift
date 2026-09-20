@@ -8,6 +8,7 @@ enum LibrarySection: String, CaseIterable, Identifiable, Hashable {
     case saved = "Saved"
     case routes = "Routes"
     case scenarios = "Scenarios"
+    case remote = "Remote"
 
     var id: String { rawValue }
 
@@ -17,6 +18,7 @@ enum LibrarySection: String, CaseIterable, Identifiable, Hashable {
         case .saved: return "mappin.and.ellipse"
         case .routes: return "point.topleft.down.to.point.bottomright.curvepath"
         case .scenarios: return "list.bullet.rectangle"
+        case .remote: return "antenna.radiowaves.left.and.right"
         }
     }
 }
