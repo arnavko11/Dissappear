@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import SwiftUI
 
 @MainActor
@@ -766,5 +767,28 @@ enum Preferences {
     static var profilePath: String? {
         get { defaults.string(forKey: "profilePath") }
         set { defaults.set(newValue, forKey: "profilePath") }
+    }
+
+    /// Optional anisette server. Empty means this Mac's own anisette, which
+    /// macOS 26 and later no longer provide to unentitled apps.
+    static var anisetteServerString: String {
+        get { defaults.string(forKey: "anisetteServer") ?? "" }
+        set { defaults.set(newValue, forKey: "anisetteServer") }
+    }
+
+    static var anisetteServerURL: URL? {
+        let trimmed = anisetteServerString.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed), url.scheme != nil else { return nil }
+        return url
+    }
+
+    /// Stable 16-byte identifier the v3 anisette protocol expects.
+    static var anisetteIdentifier: String {
+        if let stored = defaults.string(forKey: "anisetteIdentifier") { return stored }
+        var bytes = [UInt8](repeating: 0, count: 16)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let encoded = Data(bytes).base64EncodedString()
+        defaults.set(encoded, forKey: "anisetteIdentifier")
+        return encoded
     }
 }

@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @EnvironmentObject private var model: CompanionModel
     @State private var isChoosingProject = false
+    @AppStorage("anisetteServer") private var anisetteServer = ""
 
     var body: some View {
         Form {
@@ -39,6 +40,23 @@ struct SettingsView: View {
                 Text("Signing")
             } footer: {
                 Text("Apple issues certificates and profiles. This companion reads the ones already on this Mac, and can ask Apple for new ones from Build ▸ Apple ID Signing.")
+            }
+
+            Section {
+                LabeledContent("Anisette Server") {
+                    TextField("https://example.com", text: $anisetteServer)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 260)
+                }
+                if anisetteServer.trimmingCharacters(in: .whitespaces).isEmpty {
+                    Label("This Mac's own anisette will be used. macOS 26 and later withhold it from apps without Apple's private entitlements, so Apple ID sign-in fails with \"MID is invalid\".",
+                          systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Apple ID Sign-In")
+            } footer: {
+                Text("Only needed for Build ▸ Apple ID Signing. An anisette server computes the device attestation Apple requires, which macOS no longer provides to this app. It receives a random identifier for this Mac, so use one you run or trust. Installing with a provisioning profile needs none of this.")
             }
 
             Section {

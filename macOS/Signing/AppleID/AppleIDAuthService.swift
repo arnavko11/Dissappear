@@ -42,7 +42,7 @@ struct AppleIDAuthService {
 
         // One anisette set for the whole exchange: the one-time password and
         // the machine identifier are only valid together.
-        let anisetteHeaders = try anisette.headers()
+        let anisetteHeaders = try await anisette.headers()
         let clientData = anisette.clientProvidedData(from: anisetteHeaders)
 
         let initResponse = try await send(headers: anisetteHeaders, request: [
@@ -116,7 +116,7 @@ struct AppleIDAuthService {
     func requestVerificationCode(for context: TwoFactorContext) async throws {
         var request = URLRequest(url: AppleIDEndpoint.trustedDevice)
         request.httpMethod = "GET"
-        try applyIdentityHeaders(to: &request, adsid: context.adsid, idmsToken: context.idmsToken)
+        try await applyIdentityHeaders(to: &request, adsid: context.adsid, idmsToken: context.idmsToken)
         _ = try? await session.data(for: request)
     }
 
@@ -126,7 +126,7 @@ struct AppleIDAuthService {
                                 password: String) async throws -> Session {
         var request = URLRequest(url: AppleIDEndpoint.trustedDeviceCode)
         request.httpMethod = "POST"
-        try applyIdentityHeaders(to: &request, adsid: context.adsid, idmsToken: context.idmsToken)
+        try await applyIdentityHeaders(to: &request, adsid: context.adsid, idmsToken: context.idmsToken)
         request.setValue(code, forHTTPHeaderField: "security-code")
 
         let (data, _) = try await session.data(for: request)
@@ -204,8 +204,8 @@ struct AppleIDAuthService {
         return inner
     }
 
-    private func applyIdentityHeaders(to request: inout URLRequest, adsid: String, idmsToken: String) throws {
-        for (key, value) in try anisette.headers() {
+    private func applyIdentityHeaders(to request: inout URLRequest, adsid: String, idmsToken: String) async throws {
+        for (key, value) in try await anisette.headers() {
             request.setValue(value, forHTTPHeaderField: key)
         }
         let identity = Data("\(adsid):\(idmsToken)".utf8).base64EncodedString()
