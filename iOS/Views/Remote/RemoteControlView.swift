@@ -68,7 +68,7 @@ struct RemoteControlView: View {
             } header: {
                 Text("Companion")
             } footer: {
-                Text("Shown in the macOS companion under Settings ▸ Remote Control. Both devices must be on the same network.")
+                Text("Shown in the macOS companion under Settings ▸ Remote Control. Nearby discovery works on the same network; away from home, use the address the companion shows for your mesh VPN.")
             }
 
             if let error = client.lastError {

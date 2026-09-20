@@ -69,7 +69,9 @@ final class ControlServer: @unchecked Sendable {
     func start(preferredPort: UInt16 = 8787) throws {
         stop()
 
-        pairingCode = String(format: "%06d", Int.random(in: 0...999_999))
+        // Unambiguous characters only: this gets typed on a phone.
+        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+        pairingCode = String((0..<8).map { _ in alphabet.randomElement() ?? "A" })
 
         let parameters = NWParameters.tcp
         parameters.includePeerToPeer = false

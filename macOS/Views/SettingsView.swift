@@ -97,6 +97,20 @@ struct SettingsView: View {
                     StatusRow(label: "Sleep",
                               value: model.isKeepingAwake ? "Staying awake" : "Normal",
                               state: model.isKeepingAwake ? .good : .inactive)
+
+                    if let remote = model.remoteAddress {
+                        LabeledContent("Away From Home") {
+                            Text("\(remote.hostName):\(model.controlServerAddress?.split(separator: ":").last.map(String.init) ?? "8787")")
+                                .textSelection(.enabled)
+                        }
+                        Text("\(remote.provider) is set up, so this address reaches the Mac from anywhere. Enter it in the iOS app's Address field when you are away.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Away from home, the phone needs a shared network with this Mac. A mesh VPN such as Tailscale on both devices does that, and its address will appear here. Do not forward a router port to this server instead: it speaks plain HTTP and is meant for a private network.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                     Text("Idle sleep is held off while a session is live. Closing the lid still sleeps the Mac unless it is plugged in with an external display, and this cannot stop sleep you ask for or a flat battery.")
                         .font(.callout)
                         .foregroundStyle(.secondary)

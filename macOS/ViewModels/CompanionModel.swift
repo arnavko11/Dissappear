@@ -27,6 +27,8 @@ final class CompanionModel: ObservableObject {
     @Published private(set) var controlServerAddress: String?
     @Published private(set) var controlServerCode: String?
     @Published private(set) var isKeepingAwake = false
+    /// Address that works from outside the home network, when a mesh VPN is set up.
+    @Published private(set) var remoteAddress: MeshNetworkService.Address?
     @Published var selectedDeviceID: Device.ID?
     @Published private(set) var identities: [SigningIdentity] = []
     @Published var selectedIdentityID: SigningIdentity.ID?
@@ -57,6 +59,7 @@ final class CompanionModel: ObservableObject {
     fileprivate let locationSimulation = LocationSimulationService()
     fileprivate let controlServer = ControlServer()
     fileprivate let wakeAssertion = WakeAssertion()
+    fileprivate let meshNetwork = MeshNetworkService()
     private let libraryStore: LibraryStore
 
     fileprivate var bundleIdentifier = "com.dissappear.testapp"
@@ -792,6 +795,7 @@ extension CompanionModel {
             wakeAssertion.acquire(reason: WakeAssertion.Reason.remoteControl)
             isKeepingAwake = wakeAssertion.isActive
             appendLog("Remote control listening on \(controlServerAddress ?? "")")
+            Task { remoteAddress = await meshNetwork.remoteAddress() }
         } catch {
             self.error = .generic("Remote control could not start", error,
                                   action: "Another app may be using the port. Try again.")
