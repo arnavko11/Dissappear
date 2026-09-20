@@ -8,16 +8,7 @@ struct DevicesView: View {
             if let device = model.selectedDevice {
                 DeviceDetailView(device: device)
             } else {
-                ContentUnavailableView {
-                    Label("No iPhone Connected", systemImage: "cable.connector.slash")
-                } description: {
-                    Text(model.toolchain.hasDeviceCtl
-                         ? "Connect an iPhone over USB, unlock it, and tap Trust when prompted."
-                         : "Install Xcode and its command line developer tools to detect connected devices.")
-                } actions: {
-                    Button("Refresh") { Task { await model.refreshAll() } }
-                        .buttonStyle(.borderedProminent)
-                }
+                NoDeviceView()
             }
         }
         .navigationTitle("Devices")
@@ -189,5 +180,53 @@ struct GuidanceCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+
+/// Empty state that explains why no device was found and what to do next.
+private struct NoDeviceView: View {
+    @EnvironmentObject private var model: CompanionModel
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 18) {
+                ContentUnavailableView {
+                    Label(hint?.title ?? "No iPhone Connected", systemImage: "cable.connector.slash")
+                } description: {
+                    Text(hint?.message ?? "Connect an iPhone over USB, unlock it, and tap Trust when prompted.")
+                } actions: {
+                    Button("Refresh") { Task { await model.refreshAll() } }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.isBusy)
+                }
+
+                if let action = hint?.action {
+                    GuidanceCard(title: "What to do", message: action, systemImage: "wrench.and.screwdriver")
+                        .frame(maxWidth: 520)
+                }
+
+                if let diagnostics = model.diagnostics {
+                    TechnicalDetails(text: """
+                    $ \(diagnostics.command)
+                    exit code: \(diagnostics.exitCode)
+
+                    \(diagnostics.output)
+
+                    Developer directory: \(model.toolchain.developerDirectory ?? "not set")
+                    xcodebuild: \(model.toolchain.hasXcodebuild ? model.toolchain.summary : "not available")
+                    devicectl: \(model.toolchain.hasDeviceCtl ? "available" : "not available")
+                    USB Apple devices: \(diagnostics.usbDeviceNames.isEmpty ? "none" : diagnostics.usbDeviceNames.joined(separator: ", "))
+                    """)
+                    .frame(maxWidth: 520)
+                }
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var hint: (title: String, message: String, action: String?)? {
+        model.deviceHint
     }
 }

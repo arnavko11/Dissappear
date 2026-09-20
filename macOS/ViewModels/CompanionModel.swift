@@ -5,6 +5,7 @@ import SwiftUI
 final class CompanionModel: ObservableObject {
     @Published private(set) var toolchain: ToolchainStatus = .unknown
     @Published private(set) var devices: [Device] = []
+    @Published private(set) var diagnostics: DeviceDiscovery?
     @Published var selectedDeviceID: Device.ID?
     @Published private(set) var identities: [SigningIdentity] = []
     @Published var selectedIdentityID: SigningIdentity.ID?
@@ -66,23 +67,48 @@ final class CompanionModel: ObservableObject {
     }
 
     func refreshDevices() async {
-        guard toolchain.hasDeviceCtl else {
-            devices = []
-            return
+        activity = "Looking for connected devices"
+        defer { if !isBusy { activity = nil } }
+
+        var discovery = await deviceService.discover()
+        let discovered = discovery.devices.filter(\.isPhysicalIOSDevice)
+
+        // Only pay for the USB scan when devicectl came back empty — that is
+        // exactly when the user needs to know whether the cable is the problem.
+        if discovered.isEmpty {
+            discovery.usbDeviceNames = await deviceService.attachedAppleDeviceNames()
         }
-        do {
-            let discovered = try await deviceService.connectedDevices().filter(\.isPhysicalIOSDevice)
-            devices = discovered
-            if selectedDeviceID == nil || !discovered.contains(where: { $0.id == selectedDeviceID }) {
-                selectedDeviceID = discovered.first?.id
-            }
-        } catch let failure as CompanionError {
-            error = failure
-            devices = []
-        } catch {
-            self.error = .generic("Device discovery failed", error)
-            devices = []
+
+        devices = discovered
+        diagnostics = discovery
+        if selectedDeviceID == nil || !discovered.contains(where: { $0.id == selectedDeviceID }) {
+            selectedDeviceID = discovered.first?.id
         }
+    }
+
+    /// Why the Devices screen looks the way it does, in the user's terms.
+    var deviceHint: (title: String, message: String, action: String?)? {
+        guard devices.isEmpty else { return nil }
+
+        if !toolchain.hasDeviceCtl {
+            return ("Xcode Is Required",
+                    "devicectl ships inside Xcode, not with the Command Line Tools. macOS can show your iPhone in Finder without it, which is why the device appears there but not here.",
+                    "Install Xcode from the App Store, open it once to accept the license, then choose Xcode ▸ Settings ▸ Locations and set Command Line Tools to that Xcode.")
+        }
+
+        if let usb = diagnostics?.usbDeviceNames, !usb.isEmpty {
+            return ("\(usb.joined(separator: ", ")) Connected, But Not Available for Development",
+                    "macOS sees the device on USB, but devicectl reports no development devices. A device paired for Finder sync is not automatically paired for development.",
+                    "Unlock the iPhone and keep it unlocked, then open Xcode ▸ Window ▸ Devices and Simulators and select it so Xcode can prepare it. Enable Settings ▸ Privacy & Security ▸ Developer Mode on the iPhone and restart it when asked.")
+        }
+
+        if let diagnostics, !diagnostics.succeeded {
+            return ("Device Discovery Failed",
+                    "devicectl exited with code \(diagnostics.exitCode).",
+                    "Check the technical details below, then confirm the command works in Terminal.")
+        }
+
+        return nil
     }
 
     func refreshSigning() async {

@@ -1,21 +1,78 @@
 import Foundation
 
+struct DeviceDiscovery {
+    var devices: [Device]
+    var command: String
+    var exitCode: Int32
+    var output: String
+    /// Apple devices seen on the USB bus, even when devicectl reports nothing.
+    var usbDeviceNames: [String] = []
+
+    var succeeded: Bool { exitCode == 0 }
+}
+
 /// Device discovery through `xcrun devicectl`, Apple's supported CLI for
 /// connected development devices.
 struct DeviceService {
     private let runner = ProcessRunner.shared
 
-    func connectedDevices() async throws -> [Device] {
+    /// Never throws: discovery problems are reported so the UI can explain them.
+    func discover() async -> DeviceDiscovery {
         let output = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("dissappear-devices-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: output) }
 
-        let result = try await runner.xcrun(["devicectl", "list", "devices", "--timeout", "10", "--json-output", output.path])
-        guard result.succeeded else {
-            throw CompanionError.fromToolOutput(stage: "Device discovery", result: result)
+        let arguments = ["devicectl", "list", "devices", "--timeout", "10", "--json-output", output.path]
+        let command = "xcrun " + arguments.joined(separator: " ")
+
+        let result: ProcessResult
+        do {
+            result = try await runner.xcrun(arguments)
+        } catch {
+            return DeviceDiscovery(devices: [],
+                                   command: command,
+                                   exitCode: -1,
+                                   output: error.localizedDescription)
         }
-        guard let data = try? Data(contentsOf: output) else { return [] }
-        return Self.parse(data)
+
+        guard result.succeeded, let data = try? Data(contentsOf: output) else {
+            return DeviceDiscovery(devices: [],
+                                   command: command,
+                                   exitCode: result.exitCode,
+                                   output: result.combinedOutput)
+        }
+
+        let devices = Self.parse(data)
+        return DeviceDiscovery(devices: devices,
+                               command: command,
+                               exitCode: result.exitCode,
+                               output: result.combinedOutput.isEmpty
+                                   ? "Reported \(devices.count) device(s)."
+                                   : result.combinedOutput)
+    }
+
+    /// Reads the USB bus so the app can tell "no iPhone attached" apart from
+    /// "iPhone attached but Xcode's tooling cannot see it".
+    func attachedAppleDeviceNames() async -> [String] {
+        guard let result = try? await runner.run("/usr/sbin/system_profiler", ["SPUSBDataType", "-json"]),
+              result.succeeded,
+              let data = result.standardOutput.data(using: .utf8),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+
+        var names: [String] = []
+        func walk(_ value: Any) {
+            if let array = value as? [Any] {
+                array.forEach(walk)
+            } else if let node = value as? [String: Any] {
+                if let name = node["_name"] as? String,
+                   ["iphone", "ipad", "ipod"].contains(where: { name.lowercased().contains($0) }) {
+                    names.append(name)
+                }
+                node.values.forEach(walk)
+            }
+        }
+        walk(root)
+        return Array(Set(names)).sorted()
     }
 
     static func parse(_ data: Data) -> [Device] {
@@ -32,8 +89,8 @@ struct DeviceService {
             let pairing = (connection["pairingState"] as? String ?? "").lowercased()
             let tunnel = (connection["tunnelState"] as? String ?? "").lowercased()
             let state: DeviceConnectionState
-            if pairing == "paired" && (tunnel == "connected" || tunnel == "available") {
-                state = .connected
+            if pairing == "paired" {
+                state = (tunnel == "connected" || tunnel == "available") ? .connected : .unavailable
             } else if pairing.isEmpty || pairing == "unpaired" || pairing == "pairingrequested" {
                 state = .pairingNeeded
             } else {
