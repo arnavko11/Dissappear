@@ -47,6 +47,9 @@ struct Device: Identifiable, Hashable, Sendable {
     var developerMode: DeveloperModeStatus
     var connection: DeviceConnectionState
     var transport: String
+    /// Reported by devicectl; informational only, since tools open the tunnel
+    /// themselves when they need one.
+    var tunnelState: String = ""
 
     var isPhysicalIOSDevice: Bool {
         platform.lowercased().contains("ios") || platform.lowercased().contains("iphone")

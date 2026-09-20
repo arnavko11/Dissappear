@@ -52,7 +52,7 @@ struct DeviceDetailView: View {
                         StatusRow(label: "Identifier", value: device.productType)
                         StatusRow(label: "System", value: "\(device.platform) \(device.osVersion)")
                         StatusRow(label: "Connection",
-                                  value: device.connection.displayName,
+                                  value: connectionDescription,
                                   state: device.connection == .connected ? .good : .warning)
                         StatusRow(label: "Developer Mode",
                                   value: device.developerMode.displayName,
@@ -141,6 +141,11 @@ struct DeviceDetailView: View {
                 .disabled(!model.isAppInstalled)
         }
         .disabled(model.isBusy)
+    }
+
+    private var connectionDescription: String {
+        let transport = device.transport.isEmpty ? "" : " · \(device.transport)"
+        return device.connection.displayName + transport
     }
 
     private var developerModeState: StatusDot.State {

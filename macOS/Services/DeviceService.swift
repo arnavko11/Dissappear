@@ -88,13 +88,15 @@ struct DeviceService {
 
             let pairing = (connection["pairingState"] as? String ?? "").lowercased()
             let tunnel = (connection["tunnelState"] as? String ?? "").lowercased()
+
+            // A paired device is usable. The tunnel is opened on demand by the
+            // tools themselves, so its state is reported separately rather than
+            // treated as a connection failure.
             let state: DeviceConnectionState
-            if pairing == "paired" {
-                state = (tunnel == "connected" || tunnel == "available") ? .connected : .unavailable
-            } else if pairing.isEmpty || pairing == "unpaired" || pairing == "pairingrequested" {
+            if pairing == "unpaired" || pairing == "pairingrequested" {
                 state = .pairingNeeded
             } else {
-                state = .unavailable
+                state = .connected
             }
 
             return Device(udid: udid,
@@ -107,7 +109,8 @@ struct DeviceService {
                           osBuild: properties["osBuildUpdate"] as? String ?? "",
                           developerMode: DeveloperModeStatus(rawValueOrUnknown: properties["developerModeStatus"] as? String),
                           connection: state,
-                          transport: connection["transportType"] as? String ?? "")
+                          transport: connection["transportType"] as? String ?? "",
+                          tunnelState: tunnel)
         }
     }
 }

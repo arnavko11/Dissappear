@@ -58,6 +58,14 @@ struct SettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+
+            Section("About") {
+                LabeledContent("Version", value: Self.version)
+                LabeledContent("Build", value: Self.build)
+                StatusRow(label: "Bundled iOS Build",
+                          value: model.hasBundledBuild ? (model.bundledBuildSize ?? "Included") : "Not included",
+                          state: model.hasBundledBuild ? .good : .inactive)
+            }
         }
         .formStyle(.grouped)
         .navigationTitle("Settings")
@@ -68,5 +76,13 @@ struct SettingsView: View {
                 model.configuration.projectPath = url.path
             }
         }
+    }
+
+    private static var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+    }
+
+    private static var build: String {
+        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
     }
 }
