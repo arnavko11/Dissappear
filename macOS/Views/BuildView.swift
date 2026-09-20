@@ -71,11 +71,24 @@ struct BuildView: View {
 
                     LabeledContent("Provisioning Profile") {
                         HStack {
-                            Text(model.selectedProfile?.name ?? model.profileURL?.lastPathComponent ?? "Not selected")
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .foregroundStyle(model.selectedProfile == nil ? .secondary : .primary)
-                            Button("Choose…") { isChoosingProfile = true }
+                            Menu {
+                                if model.installedDevelopmentProfiles.isEmpty {
+                                    Text("None installed")
+                                }
+                                ForEach(model.installedDevelopmentProfiles) { profile in
+                                    Button {
+                                        Task { await model.loadProfile(at: profile.fileURL) }
+                                    } label: {
+                                        Text(model.describe(profile))
+                                    }
+                                }
+                            } label: {
+                                Text(model.selectedProfile?.name ?? "Not selected")
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .foregroundStyle(model.selectedProfile == nil ? .secondary : .primary)
+                            }
+                            Button("Choose File…") { isChoosingProfile = true }
                         }
                     }
                     if let profile = model.selectedProfile {

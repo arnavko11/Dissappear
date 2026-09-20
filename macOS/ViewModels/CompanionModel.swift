@@ -817,6 +817,22 @@ extension CompanionModel {
 
     var libraryLocations: [SimulatedLocation] { libraryStore.library.locations }
 
+    /// Development profiles already on this Mac, so a profile can be picked
+    /// from a list rather than hunted for inside a hidden Library folder.
+    var installedDevelopmentProfiles: [ProvisioningProfile] {
+        profiles.filter { $0.isDevelopment && $0.expirationDate > Date() }
+    }
+
+    /// Says whether a profile is usable for the selected device.
+    func describe(_ profile: ProvisioningProfile) -> String {
+        let days = Calendar.current.dateComponents([.day], from: Date(), to: profile.expirationDate).day ?? 0
+        var parts = [profile.name, "\(max(0, days))d left"]
+        if let device = selectedDevice {
+            parts.append(profile.includes(deviceUDID: device.udid) ? "includes this device" : "other devices only")
+        }
+        return parts.joined(separator: " · ")
+    }
+
     /// Lets the iOS app steer the simulated location over the local network,
     /// so the Mac can stay put while holding the developer session.
     func startControlServer() {
