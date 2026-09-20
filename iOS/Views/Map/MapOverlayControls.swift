@@ -8,7 +8,11 @@ struct MapOverlayControls: View {
     @AppStorage(PreferenceKey.mapStyle) private var mapStyleRaw = MapStyleOption.standard.rawValue
 
     var body: some View {
-        VStack(spacing: 8) {
+        GlassGroup(spacing: 10) { controls }
+    }
+
+    private var controls: some View {
+        VStack(spacing: 10) {
             Menu {
                 Picker("Map Style", selection: $mapStyleRaw) {
                     ForEach(MapStyleOption.allCases) { option in
@@ -28,7 +32,7 @@ struct MapOverlayControls: View {
                 Button { zoom(by: 2) } label: { controlIcon("minus") }
                     .accessibilityLabel("Zoom out")
             }
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            .glassPanel(cornerRadius: 18, interactive: true)
 
             if engine.fix != nil {
                 Button(action: recenter) { controlIcon("scope") }
@@ -41,9 +45,8 @@ struct MapOverlayControls: View {
 
     private func controlIcon(_ name: String) -> some View {
         Image(systemName: name)
-            .frame(width: 34, height: 34)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator.opacity(0.6)))
+            .frame(width: 36, height: 36)
+            .glassPanel(cornerRadius: 18, interactive: true)
     }
 
     private func zoom(by factor: Double) {

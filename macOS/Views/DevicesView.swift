@@ -205,9 +205,9 @@ struct GuidanceCard: View {
             }
             Spacer()
         }
-        .padding(12)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+        .glassPanel(cornerRadius: 14)
     }
 }
 

@@ -163,10 +163,9 @@ private struct TapModeBanner: View {
                 .font(.footnote.weight(.medium))
                 .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.separator.opacity(0.6)))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .glassCapsule()
         .padding(.top, 8)
         .transition(.move(edge: .top).combined(with: .opacity))
         .accessibilityElement(children: .combine)

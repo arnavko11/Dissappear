@@ -30,9 +30,10 @@ struct SimulationBar: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
+        .padding(.vertical, 12)
+        .glassPanel(cornerRadius: 22)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
     }
 
     private var summary: some View {

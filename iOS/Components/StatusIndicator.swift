@@ -18,9 +18,9 @@ struct StatusIndicator: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(.quaternary.opacity(0.4), in: Capsule())
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .glassCapsule()
         .animation(.easeInOut(duration: 0.2), value: status)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Session status")
