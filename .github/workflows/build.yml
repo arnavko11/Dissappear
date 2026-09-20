@@ -45,8 +45,18 @@ jobs:
       - name: Warning summary
         if: always()
         run: |
-          count=$(grep -c "warning:" xcodebuild.log || true)
-          echo "### ${{ matrix.scheme }}: $count compiler warnings" >> "$GITHUB_STEP_SUMMARY"
-          if [ "$count" -gt 0 ]; then
-            grep "warning:" xcodebuild.log | sort -u | head -40 >> "$GITHUB_STEP_SUMMARY"
-          fi
+          grep -oE "[^ ]+\.swift:[0-9]+:[0-9]+: warning: .*" xcodebuild.log \
+            | sed 's|/Users/runner/work/Dissappear/Dissappear/||' \
+            | sort -u > warnings.txt || true
+          count=$(wc -l < warnings.txt | tr -d ' ')
+          echo "::group::${{ matrix.scheme }}: $count source warnings"
+          cat warnings.txt
+          echo "::endgroup::"
+          {
+            echo "### ${{ matrix.scheme }}: $count source warnings"
+            if [ "$count" -gt 0 ]; then
+              echo '```'
+              cat warnings.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
