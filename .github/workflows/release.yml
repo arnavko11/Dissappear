@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a GitHub Release (otherwise build and upload artifacts only)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: macos-15
+    env:
+      VERSION: 1.0.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: xcodebuild -version
+
+      - name: Build macOS companion
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Dissappear.xcodeproj \
+            -scheme DissappearCompanion \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath build-macos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Build iOS app for device (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Dissappear.xcodeproj \
+            -scheme Dissappear \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build-ios \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Build iOS app for Simulator
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Dissappear.xcodeproj \
+            -scheme Dissappear \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build-ios-sim \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "build-macos/Build/Products/Release/DissappearCompanion.app" \
+            "artifacts/DissappearCompanion-${VERSION}-macOS.zip"
+
+          ditto -c -k --sequesterRsrc --keepParent \
+            "build-ios-sim/Build/Products/Release-iphonesimulator/Dissappear.app" \
+            "artifacts/Dissappear-${VERSION}-iOS-Simulator.zip"
+
+          # Unsigned device build, packaged so it can be signed with the user's
+          # own Apple Development identity (the macOS companion does this).
+          rm -rf payload && mkdir -p payload/Payload
+          cp -R "build-ios/Build/Products/Release-iphoneos/Dissappear.app" payload/Payload/
+          (cd payload && zip -qry "../artifacts/Dissappear-${VERSION}-iOS-unsigned.ipa" Payload)
+
+          ls -lh artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dissappear-${{ env.VERSION }}
+          path: artifacts/*
+          if-no-files-found: error
+
+      - name: Publish release
+        if: github.event_name == 'push' || inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          {
+            printf 'Automated build of the Dissappear macOS companion and iOS test app.\n\n'
+            printf '| Asset | Contents |\n| --- | --- |\n'
+            printf '| `DissappearCompanion-*-macOS.zip` | macOS companion, built unsigned. Right-click then Open on first launch, or sign it locally with your own identity. |\n'
+            printf '| `Dissappear-*-iOS-Simulator.zip` | iOS app built for the Simulator. Drag it onto a booted simulator to run. |\n'
+            printf '| `Dissappear-*-iOS-unsigned.ipa` | iOS device build, unsigned. Install it by signing with your own Apple Development identity; the macOS companion builds, signs and installs it through Xcode tooling. |\n\n'
+            printf 'Neither asset is distribution-signed. Device installs go through Apple standard development signing and provisioning.\n'
+          } > notes.md
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes-file notes.md \
+            --target "${GITHUB_SHA}" \
+            artifacts/*
