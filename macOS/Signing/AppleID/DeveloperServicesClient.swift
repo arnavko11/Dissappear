@@ -153,7 +153,7 @@ struct DeveloperServicesClient {
     private func send(action: String, platform: Bool = true, body: [String: Any]) async throws -> [String: Any] {
         var request = URLRequest(url: AppleIDEndpoint.developerServices.appendingPathComponent(action))
         request.httpMethod = "POST"
-        for (key, value) in try anisette.headers() {
+        for (key, value) in try await anisette.headers() {
             request.setValue(value, forHTTPHeaderField: key)
         }
         request.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
