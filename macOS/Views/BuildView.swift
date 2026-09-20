@@ -1,7 +1,9 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct BuildView: View {
     @EnvironmentObject private var model: CompanionModel
+    @State private var isChoosingProfile = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,6 +30,47 @@ struct BuildView: View {
                               value: model.provisioning.displayName,
                               state: model.provisioning.profile == nil ? .warning : .good)
                     StatusRow(label: "Signing State", value: model.signingState.headline)
+                }
+
+                Section {
+                    StatusRow(label: "Bundled Build",
+                              value: model.hasBundledBuild ? (model.bundledBuildSize ?? "Included") : "Not included",
+                              state: model.hasBundledBuild ? .good : .inactive)
+                    StatusRow(label: "Install Tool",
+                              value: model.preferredTool?.backend.displayName ?? "None available",
+                              state: model.preferredTool == nil ? .bad : .good)
+
+                    LabeledContent("Provisioning Profile") {
+                        HStack {
+                            Text(model.selectedProfile?.name ?? model.profileURL?.lastPathComponent ?? "Not selected")
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .foregroundStyle(model.selectedProfile == nil ? .secondary : .primary)
+                            Button("Choose…") { isChoosingProfile = true }
+                        }
+                    }
+                    if let profile = model.selectedProfile {
+                        StatusRow(label: "Profile Expires",
+                                  value: profile.expirationDate.formatted(date: .abbreviated, time: .shortened))
+                        StatusRow(label: "Devices in Profile", value: "\(profile.provisionedDeviceUDIDs.count)")
+                    }
+
+                    Button {
+                        Task { await model.installBundledBuild() }
+                    } label: {
+                        Label("Sign & Install Bundled Build", systemImage: "square.and.arrow.down.on.square")
+                    }
+                    .disabled(model.isBusy || !model.hasBundledBuild || model.selectedDevice == nil || model.selectedProfile == nil)
+
+                    if model.preferredTool == nil {
+                        Label("No install tool found. Install Xcode, or Apple Configurator plus its automation tools, or the libimobiledevice tools.",
+                              systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Install Without Building")
+                } footer: {
+                    Text("Signs the iOS build embedded in this app with your own Apple Development certificate and the profile you choose. Apple issues both; this app only uses them. With a free Apple ID the signature lasts 7 days, after which you install again. The first launch needs Settings ▸ General ▸ VPN & Device Management on the iPhone to trust the developer.")
                 }
 
                 Section("Pipeline") {
@@ -60,6 +103,12 @@ struct BuildView: View {
                     Button("Clean Build Folder") { Task { await model.cleanBuildFolder() } }
                     Button("Open Xcode") { model.openXcode() }
                 } label: { Label("More", systemImage: "ellipsis.circle") }
+            }
+        }
+        .fileImporter(isPresented: $isChoosingProfile,
+                      allowedContentTypes: [UTType(filenameExtension: "mobileprovision") ?? .data, .data]) { result in
+            if case let .success(url) = result {
+                Task { await model.loadProfile(at: url) }
             }
         }
         .safeAreaInset(edge: .bottom) {

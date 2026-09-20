@@ -3,3 +3,6 @@ build/
 DerivedData/
 *.xcuserstate
 xcuserdata/
+
+# Generated into the companion by the release workflow
+macOS/Resources/BundledApp.ipa

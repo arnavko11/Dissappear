@@ -29,20 +29,6 @@ jobs:
       - name: Show toolchain
         run: xcodebuild -version
 
-      - name: Build macOS companion
-        run: |
-          set -o pipefail
-          xcodebuild \
-            -project Dissappear.xcodeproj \
-            -scheme DissappearCompanion \
-            -configuration Release \
-            -destination 'platform=macOS' \
-            -derivedDataPath build-macos \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build
-
       - name: Build iOS app for device (unsigned)
         run: |
           set -o pipefail
@@ -52,6 +38,29 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build-ios \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Embed iOS build in the companion
+        run: |
+          set -euo pipefail
+          rm -rf payload && mkdir -p payload/Payload
+          cp -R "build-ios/Build/Products/Release-iphoneos/Dissappear.app" payload/Payload/
+          mkdir -p macOS/Resources
+          (cd payload && zip -qry "../macOS/Resources/BundledApp.ipa" Payload)
+          ls -lh macOS/Resources/BundledApp.ipa
+
+      - name: Build macOS companion
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Dissappear.xcodeproj \
+            -scheme DissappearCompanion \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath build-macos \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -84,11 +93,9 @@ jobs:
             "build-ios-sim/Build/Products/Release-iphonesimulator/Dissappear.app" \
             "artifacts/Dissappear-${VERSION}-iOS-Simulator.zip"
 
-          # Unsigned device build, packaged so it can be signed with the user's
-          # own Apple Development identity (the macOS companion does this).
-          rm -rf payload && mkdir -p payload/Payload
-          cp -R "build-ios/Build/Products/Release-iphoneos/Dissappear.app" payload/Payload/
-          (cd payload && zip -qry "../artifacts/Dissappear-${VERSION}-iOS-unsigned.ipa" Payload)
+          # Same unsigned device build the companion now embeds, so it can be
+          # signed with the user's own Apple Development identity.
+          cp macOS/Resources/BundledApp.ipa "artifacts/Dissappear-${VERSION}-iOS-unsigned.ipa"
 
           ls -lh artifacts
 

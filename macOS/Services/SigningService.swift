@@ -72,6 +72,13 @@ struct SigningService {
                                    fileURL: fileURL)
     }
 
+    /// Reads a single profile the user picked from disk.
+    func profile(at url: URL) async -> ProvisioningProfile? {
+        guard let decoded = try? await runner.run("/usr/bin/security", ["cms", "-D", "-i", url.path]),
+              decoded.succeeded else { return nil }
+        return Self.parseProfile(Data(decoded.standardOutput.utf8), fileURL: url)
+    }
+
     func provisioningStatus(bundleIdentifier: String,
                             teamID: String?,
                             deviceUDID: String?,

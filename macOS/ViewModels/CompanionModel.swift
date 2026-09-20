@@ -6,6 +6,12 @@ final class CompanionModel: ObservableObject {
     @Published private(set) var toolchain: ToolchainStatus = .unknown
     @Published private(set) var devices: [Device] = []
     @Published private(set) var diagnostics: DeviceDiscovery?
+    @Published private(set) var tools: [ResolvedTool] = []
+    @Published private(set) var bundledBuildSize: String?
+    @Published var profileURL: URL? {
+        didSet { Preferences.profilePath = profileURL?.path }
+    }
+    @Published private(set) var selectedProfile: ProvisioningProfile?
     @Published var selectedDeviceID: Device.ID?
     @Published private(set) var identities: [SigningIdentity] = []
     @Published var selectedIdentityID: SigningIdentity.ID?
@@ -25,12 +31,15 @@ final class CompanionModel: ObservableObject {
 
     private let toolchainService = ToolchainService()
     private let deviceService = DeviceService()
-    private let signingService = SigningService()
+    fileprivate let signingService = SigningService()
     private let buildService = BuildService()
-    private let installationService = InstallationService()
+    fileprivate let installationService = InstallationService()
+    private let toolingService = DeviceToolingService()
+    fileprivate let bundledBuildService = BundledBuildService()
+    fileprivate let resignService = ResignService()
     private let libraryStore: LibraryStore
 
-    private var bundleIdentifier = "com.dissappear.testapp"
+    fileprivate var bundleIdentifier = "com.dissappear.testapp"
 
     init(libraryStore: LibraryStore) {
         self.libraryStore = libraryStore
@@ -40,6 +49,9 @@ final class CompanionModel: ObservableObject {
         }
         self.configuration = configuration
         selectedIdentityID = Preferences.identityID
+        if let stored = Preferences.profilePath {
+            profileURL = URL(fileURLWithPath: stored)
+        }
     }
 
     var selectedDevice: Device? {
@@ -57,10 +69,27 @@ final class CompanionModel: ObservableObject {
 
     var isAppInstalled: Bool { installedApp != nil }
 
+    /// Apple's own tooling is preferred when present.
+    var preferredTool: ResolvedTool? { tools.first }
+
+    var hasBundledBuild: Bool { bundledBuildService.isAvailable }
+
+    private func requireTool() throws -> ResolvedTool {
+        guard let preferredTool else {
+            throw CompanionError(title: "No Install Tool Available",
+                                 details: "Nothing on this Mac can install a build on a device.",
+                                 recommendedAction: "Install Xcode, or Apple Configurator plus its automation tools, or the libimobiledevice tools.",
+                                 technicalDetails: "No devicectl, cfgutil or ideviceinstaller found")
+        }
+        return preferredTool
+    }
+
     // MARK: - Refresh
 
     func refreshAll() async {
         toolchain = await toolchainService.status()
+        tools = await toolingService.availableTools()
+        bundledBuildSize = bundledBuildService.version
         await refreshDevices()
         await refreshSigning()
         await refreshInstallationState()
@@ -71,18 +100,22 @@ final class CompanionModel: ObservableObject {
         defer { if !isBusy { activity = nil } }
 
         var discovery = await deviceService.discover()
-        let discovered = discovery.devices.filter(\.isPhysicalIOSDevice)
+        var found = discovery.devices.filter(\.isPhysicalIOSDevice)
 
-        // Only pay for the USB scan when devicectl came back empty — that is
-        // exactly when the user needs to know whether the cable is the problem.
-        if discovered.isEmpty {
+        // devicectl ships inside Xcode; fall back to libimobiledevice when present.
+        if found.isEmpty {
+            found = await toolingService.devicesFromLibimobiledevice()
+        }
+        // Only pay for the USB scan when nothing was found — that is exactly
+        // when the user needs to know whether the cable is the problem.
+        if found.isEmpty {
             discovery.usbDeviceNames = await deviceService.attachedAppleDeviceNames()
         }
 
-        devices = discovered
+        devices = found
         diagnostics = discovery
-        if selectedDeviceID == nil || !discovered.contains(where: { $0.id == selectedDeviceID }) {
-            selectedDeviceID = discovered.first?.id
+        if selectedDeviceID == nil || !found.contains(where: { $0.id == selectedDeviceID }) {
+            selectedDeviceID = found.first?.id
         }
     }
 
@@ -135,7 +168,8 @@ final class CompanionModel: ObservableObject {
             return
         }
         do {
-            let apps = try await installationService.installedApps(on: device)
+            guard let tool = preferredTool else { installedApp = nil; return }
+            let apps = try await installationService.installedApps(on: device, using: tool)
             installedApp = apps.first { $0.bundleIdentifier == bundleIdentifier }
             signingState.isInstalled = installedApp != nil
         } catch {
@@ -210,7 +244,7 @@ final class CompanionModel: ObservableObject {
         defer { isBusy = false; activity = nil }
         activity = "Launching on \(device.name)"
         do {
-            try await installationService.launch(bundleIdentifier: bundleIdentifier, on: device)
+            try await installationService.launch(bundleIdentifier: bundleIdentifier, on: device, using: requireTool())
             appendLog("Launched \(bundleIdentifier) on \(device.name)")
         } catch let failure as CompanionError {
             error = failure
@@ -225,7 +259,7 @@ final class CompanionModel: ObservableObject {
         defer { isBusy = false; activity = nil }
         activity = "Removing test app"
         do {
-            try await installationService.uninstall(bundleIdentifier: bundleIdentifier, from: device)
+            try await installationService.uninstall(bundleIdentifier: bundleIdentifier, from: device, using: requireTool())
             appendLog("Removed \(bundleIdentifier) from \(device.name)")
             await refreshInstallationState()
         } catch let failure as CompanionError {
@@ -376,7 +410,10 @@ final class CompanionModel: ObservableObject {
         stages[.install] = .running
         activity = "Installing on \(device.name)"
         do {
-            try await installationService.install(product: built, on: device) { [weak self] line in
+            try await installationService.install(appURL: built.appURL,
+                                                  ipaURL: nil,
+                                                  on: device,
+                                                  using: requireTool()) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }
             stages[.install] = .succeeded("Installed on \(device.name)")
@@ -391,7 +428,7 @@ final class CompanionModel: ObservableObject {
         stages[.launch] = .running
         activity = "Launching \(built.bundleIdentifier)"
         do {
-            try await installationService.launch(bundleIdentifier: built.bundleIdentifier, on: device)
+            try await installationService.launch(bundleIdentifier: built.bundleIdentifier, on: device, using: requireTool())
             stages[.launch] = .succeeded("Running on \(device.name)")
         } catch let failure as CompanionError {
             stages[.launch] = .failed(failure.details)
@@ -418,6 +455,115 @@ final class CompanionModel: ObservableObject {
     var logText: String { log.joined(separator: "\n") }
 }
 
+extension CompanionModel {
+    /// Signs and installs the iOS build embedded in this app, with no Xcode
+    /// project and no build step. Certificate and profile both come from the
+    /// user: Apple issues them, this app only uses them.
+    func installBundledBuild(launchWhenInstalled: Bool = true) async {
+        guard !isBusy else { return }
+        isBusy = true
+        stages = [:]
+        log = []
+        error = nil
+        defer { isBusy = false; activity = nil }
+
+        do {
+            let device = try requireDevice()
+            let tool = try requireTool()
+            stages[.developerMode] = device.developerMode == .enabled
+                ? .succeeded("Enabled")
+                : .skipped(device.developerMode.displayName)
+
+            guard let identity = selectedIdentity else {
+                stages[.identity] = .failed("No development identity")
+                throw CompanionError(title: "No Signing Identity",
+                                     details: "No Apple Development certificate was found in your keychain.",
+                                     recommendedAction: "Import a development certificate, or create one on any Mac with Xcode and export it as a .p12.",
+                                     technicalDetails: "security find-identity -v -p codesigning returned no Apple Development identities")
+            }
+            stages[.identity] = .succeeded(identity.commonName)
+
+            guard let profileURL, let profile = selectedProfile else {
+                stages[.provision] = .failed("No provisioning profile")
+                throw CompanionError(title: "No Provisioning Profile",
+                                     details: "A development profile decides which devices may run the build.",
+                                     recommendedAction: "Choose a .mobileprovision file that includes this device and matches your signing identity's team.",
+                                     technicalDetails: "profileURL is nil")
+            }
+            guard profile.includes(deviceUDID: device.udid) else {
+                stages[.provision] = .failed("Device not in profile")
+                throw CompanionError(title: "Device Not in Profile",
+                                     details: "\(device.name) is not one of the devices listed in \(profile.name).",
+                                     recommendedAction: "Register this device with your team and download an updated profile.",
+                                     technicalDetails: "UDID \(device.udid) not in \(profile.provisionedDeviceUDIDs.count) provisioned devices")
+            }
+
+            stages[.build] = .skipped("Using bundled build")
+            stages[.prepare] = .running
+            activity = "Unpacking bundled build"
+            let app = try await bundledBuildService.extract()
+            stages[.prepare] = .succeeded(app.lastPathComponent)
+
+            stages[.sign] = .running
+            activity = "Signing with \(identity.commonName)"
+            let outcome = try await resignService.resign(appURL: app,
+                                                         identity: identity,
+                                                         profileURL: profileURL,
+                                                         profile: profile) { [weak self] line in
+                Task { @MainActor in self?.appendLog(line) }
+            }
+            stages[.sign] = .succeeded(outcome.authority)
+            bundleIdentifier = outcome.bundleIdentifier
+
+            signingState.isSigned = true
+            signingState.teamID = profile.teamID
+            signingState.profileName = profile.name
+            signingState.expirationDate = profile.expirationDate
+            provisioning = profile.expirationDate > Date() ? .valid(profile) : .expired(profile)
+            let remaining = signingState.daysRemaining.map { "\($0) days remaining" } ?? "expiration unknown"
+            stages[.provision] = .succeeded("\(profile.name) · \(remaining)")
+
+            stages[.install] = .running
+            activity = "Installing with \(tool.backend.displayName)"
+            try await installationService.install(appURL: outcome.appURL,
+                                                  ipaURL: nil,
+                                                  on: device,
+                                                  using: tool) { [weak self] line in
+                Task { @MainActor in self?.appendLog(line) }
+            }
+            stages[.install] = .succeeded("Installed on \(device.name)")
+            signingState.isInstalled = true
+
+            if launchWhenInstalled, tool.backend.supportsLaunch {
+                try await installationService.launch(bundleIdentifier: outcome.bundleIdentifier, on: device, using: tool)
+                stages[.launch] = .succeeded("Running on \(device.name)")
+            } else {
+                stages[.launch] = .skipped("Open the app on \(device.name)")
+            }
+
+            await refreshInstallationState()
+        } catch let failure as CompanionError {
+            error = failure
+            appendLog("✗ \(failure.title): \(failure.details)")
+        } catch {
+            let failure = CompanionError.generic("Install failed", error)
+            self.error = failure
+            appendLog("✗ \(failure.title)")
+        }
+    }
+
+    func loadProfile(at url: URL) async {
+        profileURL = url
+        selectedProfile = await signingService.profile(at: url)
+        if selectedProfile == nil {
+            error = CompanionError(title: "Profile Could Not Be Read",
+                                   details: "That file is not a readable provisioning profile.",
+                                   recommendedAction: "Choose a .mobileprovision file exported from your Apple developer account.",
+                                   technicalDetails: url.path)
+        }
+    }
+}
+
 enum Preferences {
     private static let defaults = UserDefaults.standard
 
@@ -429,5 +575,10 @@ enum Preferences {
     static var identityID: String? {
         get { defaults.string(forKey: "identityID") }
         set { defaults.set(newValue, forKey: "identityID") }
+    }
+
+    static var profilePath: String? {
+        get { defaults.string(forKey: "profilePath") }
+        set { defaults.set(newValue, forKey: "profilePath") }
     }
 }
