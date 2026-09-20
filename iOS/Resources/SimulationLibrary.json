@@ -1,0 +1,74 @@
+{
+  "locations": [
+    {
+      "id": "9e4a4061-6662-4fa2-9a69-cf4986bfa29e",
+      "name": "Ferry Building",
+      "note": "San Francisco waterfront",
+      "coordinate": {
+        "latitude": 37.7955,
+        "longitude": -122.3937,
+        "altitude": 4
+      }
+    },
+    {
+      "id": "cbbe0dff-91d0-4c07-b183-c3366f7bcd71",
+      "name": "Dolores Park",
+      "note": "Elevated park",
+      "coordinate": {
+        "latitude": 37.7596,
+        "longitude": -122.4269,
+        "altitude": 70
+      }
+    }
+  ],
+  "routes": [
+    {
+      "id": "96d75081-0936-47a0-8332-8376da9024ce",
+      "name": "Embarcadero Run",
+      "speed": 3.5,
+      "loops": true,
+      "waypoints": [
+        {
+          "latitude": 37.7955,
+          "longitude": -122.3937,
+          "altitude": 0
+        },
+        {
+          "latitude": 37.8005,
+          "longitude": -122.3985,
+          "altitude": 0
+        },
+        {
+          "latitude": 37.8066,
+          "longitude": -122.403,
+          "altitude": 0
+        },
+        {
+          "latitude": 37.8087,
+          "longitude": -122.4098,
+          "altitude": 0
+        }
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "75c862f3-915d-4d0e-aead-2316b9f65c80",
+      "name": "Stationary — Ferry Building",
+      "summary": "Fixed coordinate",
+      "kind": "fixed",
+      "locationID": "9e4a4061-6662-4fa2-9a69-cf4986bfa29e",
+      "horizontalAccuracy": 5,
+      "updateInterval": 1
+    },
+    {
+      "id": "94820161-1a41-4ec8-a178-3c5c120f0720",
+      "name": "Jog — Embarcadero",
+      "summary": "Looping route replay",
+      "kind": "route",
+      "routeID": "96d75081-0936-47a0-8332-8376da9024ce",
+      "horizontalAccuracy": 8,
+      "updateInterval": 1
+    }
+  ]
+}
