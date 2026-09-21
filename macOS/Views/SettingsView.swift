@@ -106,6 +106,20 @@ struct SettingsView: View {
                           value: model.controlServerStatus.message ?? model.controlServerStatus.label,
                           state: serverState)
 
+                StatusRow(label: "Incoming Connections",
+                          value: firewallValue,
+                          state: model.firewallStatus.isBlocking ? .bad : .good)
+
+                if model.firewallStatus.isBlocking {
+                    Label("macOS is dropping the phone's connections before they reach this app, without a prompt, because this app is not signed with a Developer ID. The server will look like it is listening and the phone will never get an answer.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Button("Allow Incoming Connections") {
+                        Task { await model.allowIncomingConnections() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
                 if let address = model.controlServerAddress, let code = model.controlServerCode {
                     LabeledContent("Address") {
                         Text(address).textSelection(.enabled)
@@ -162,6 +176,15 @@ struct SettingsView: View {
             if case let .success(url) = result {
                 model.configuration.projectPath = url.path
             }
+        }
+    }
+
+    private var firewallValue: String {
+        switch model.firewallStatus {
+        case .off: return "Firewall off"
+        case .allowed: return "Allowed"
+        case .blocked: return "Blocked by the firewall"
+        case .unknown: return "Unknown"
         }
     }
 

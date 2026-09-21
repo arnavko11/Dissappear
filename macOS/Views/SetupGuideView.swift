@@ -31,7 +31,10 @@ struct SetupGuideView: View {
         .toolbar {
             ToolbarItem {
                 Button {
-                    Task { await model.refreshAll() }
+                    Task {
+                        await model.refreshAll()
+                        await model.refreshFirewallStatus()
+                    }
                 } label: { Label("Re-check", systemImage: "arrow.clockwise") }
                     .disabled(model.isBusy)
             }
@@ -119,6 +122,17 @@ struct SetupGuideView: View {
                     : model.isDeveloperTunnelRunning
                         ? .init(title: "Stop Tunnel", run: { Task { await model.stopDeveloperTunnel() } })
                         : .init(title: "Start Tunnel", run: { Task { await model.startDeveloperTunnel() } })),
+
+            SetupStep(
+                title: "Let the phone through the firewall",
+                detail: model.firewallStatus.isBlocking
+                    ? "macOS is dropping the phone's connections before they reach this app, and does not prompt. The server looks like it is listening and the phone never gets an answer."
+                    : "Nothing is blocking incoming connections.",
+                isDone: !model.firewallStatus.isBlocking,
+                instructions: nil,
+                action: model.firewallStatus.isBlocking
+                    ? .init(title: "Allow", run: { Task { await model.allowIncomingConnections() } })
+                    : nil),
 
             SetupStep(
                 title: "Pair your iPhone app",

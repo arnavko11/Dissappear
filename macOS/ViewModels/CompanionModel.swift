@@ -34,6 +34,8 @@ final class CompanionModel: ObservableObject {
     @Published private(set) var controlServerAddress: String?
     @Published private(set) var controlServerCode: String?
     @Published private(set) var controlServerStatus: ControlServerStatus = .off
+    /// Whether macOS is quietly dropping the phone's connections.
+    @Published private(set) var firewallStatus: FirewallService.Status = .unknown
     @Published private(set) var isKeepingAwake = false
     /// Address that works from outside the home network, when a mesh VPN is set up.
     @Published private(set) var remoteAddress: MeshNetworkService.Address?
@@ -69,6 +71,7 @@ final class CompanionModel: ObservableObject {
     fileprivate let controlServer = ControlServer()
     fileprivate let wakeAssertion = WakeAssertion()
     fileprivate let meshNetwork = MeshNetworkService()
+    fileprivate let firewall = FirewallService()
     private let libraryStore: LibraryStore
 
     fileprivate var bundleIdentifier = "com.dissappear.testapp"
@@ -130,6 +133,7 @@ final class CompanionModel: ObservableObject {
         if Preferences.remoteControlEnabled, !isControlServerRunning {
             startControlServer()
         }
+        await refreshFirewallStatus()
 
         // Spoofing needs pymobiledevice3 and nothing about installing it needs
         // a decision from the user, so it is fetched once, in the background,
@@ -1030,6 +1034,7 @@ extension CompanionModel {
             isKeepingAwake = wakeAssertion.isActive
             appendLog("Remote control listening on \(controlServerAddress ?? "")")
             Task { remoteAddress = await meshNetwork.remoteAddress() }
+            Task { await refreshFirewallStatus() }
 
         case let .failure(error):
             controlServerAddress = nil
@@ -1055,6 +1060,28 @@ extension CompanionModel {
         wakeAssertion.release(reason: WakeAssertion.Reason.remoteControl)
         isKeepingAwake = wakeAssertion.isActive
         appendLog("Remote control stopped")
+    }
+
+    /// A bound listener is not a reachable one: with the firewall on, macOS
+    /// drops incoming connections to an app without a Developer ID signature
+    /// and says nothing, so the phone just never gets an answer.
+    func refreshFirewallStatus() async {
+        firewallStatus = await firewall.status()
+        if firewallStatus.isBlocking {
+            appendLog("⚠︎ The firewall is blocking incoming connections to this app")
+        }
+    }
+
+    func allowIncomingConnections() async {
+        do {
+            try await firewall.allowIncomingConnections()
+            await refreshFirewallStatus()
+            appendLog("Firewall now allows incoming connections")
+        } catch let failure as CompanionError {
+            error = failure
+        } catch {
+            self.error = .generic("Allowing incoming connections failed", error)
+        }
     }
 
     /// Invalidates the code a phone was paired with.
