@@ -92,7 +92,7 @@ final class RemoteControlClient {
         if !isConfigured { return "Pick your Mac under Remote and enter its pairing code." }
         if !isConnected { return "Not connected to the companion on your Mac." }
         if status?.detached == true {
-            return "The iPhone is unplugged. The spoofed location is still set on it — plug it back in to change or clear it."
+            return "This iPhone has left the Mac. It is still reporting the spoofed location, but changing it needs the Mac within reach again."
         }
         if status?.ready != true { return "The companion has no iPhone it can spoof. Check the cable and Developer Mode." }
         return nil

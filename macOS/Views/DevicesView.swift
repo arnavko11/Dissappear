@@ -148,7 +148,7 @@ struct DeviceDetailView: View {
                 .formStyle(.grouped)
 
                 if model.isDeviceDetached {
-                    GuidanceCard(title: "The Spoofed Location Is Still Set",
+                    GuidanceCard(title: "Spoofing Without the Cable",
                                  message: CompanionModel.detachedExplanation,
                                  systemImage: "cable.connector.slash")
                 }

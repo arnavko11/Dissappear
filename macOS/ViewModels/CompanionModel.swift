@@ -909,9 +909,11 @@ extension CompanionModel {
     }
 
     static let detachedExplanation = """
-    The iPhone was unplugged, and the spoofed location is still in force on \
-    it: it stays until something clears it. Plug the phone back in and press \
-    Stop Spoofing. Restarting the phone also clears it.
+    The iPhone has left, and it is still reporting the spoofed location — a \
+    spoof outlives the connection that set it, so this is the way to take one \
+    out of the house. What you cannot do from here is change it: that needs \
+    the phone back on USB or on this network. Reconnect and press Stop \
+    Spoofing to end it, or restart the phone.
     """
 
     /// A cheap presence check for the watcher, which runs every few seconds.
