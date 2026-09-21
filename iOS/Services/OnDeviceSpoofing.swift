@@ -75,44 +75,52 @@ final class OnDeviceSpoofing {
             throw Failure.noPairingRecord
         }
 
+        // Ownership below follows idevice's C API, which moves some handles
+        // and borrows others. Freeing a moved handle is a double free, and
+        // reading one is a use-after-free, so each is noted where it happens.
         var pairing: OpaquePointer?
         try Self.check(idevice_pairing_file_read(pairingRecordURL.path, &pairing),
                        context: "Reading the pairing record")
-        defer { idevice_pairing_file_free(pairing) }
 
         var provider: OpaquePointer?
+        var providerError: UnsafeMutablePointer<IdeviceFfiError>?
         try withSocketAddress { address in
-            try Self.check(idevice_tcp_provider_new(address, pairing, "Dissappear", &provider),
-                           context: "Connecting to this device")
+            providerError = idevice_tcp_provider_new(address, pairing, "Dissappear", &provider)
         }
+        // The provider takes the pairing file, so it is not ours to free from
+        // here on — success or failure.
+        try Self.check(providerError, context: "Connecting to this device")
         defer { idevice_provider_free(provider) }
 
         var proxy: OpaquePointer?
         try Self.check(core_device_proxy_connect(provider, &proxy),
                        context: "Opening the device proxy")
-        defer { core_device_proxy_free(proxy) }
+
+        // Read the port before the adapter is made: creating the adapter takes
+        // the proxy, and reading it afterwards is a use-after-free.
+        var rsdPort: UInt16 = 0
+        try Self.check(core_device_proxy_get_server_rsd_port(proxy, &rsdPort),
+                       context: "Finding the service port")
 
         // The adapter is a TCP stack in user space, so no tunnel interface and
         // no root are needed — which is the whole reason this can run inside
-        // an ordinary sideloaded app.
+        // an ordinary sideloaded app. It takes the proxy with it.
         var adapter: OpaquePointer?
         try Self.check(core_device_proxy_create_tcp_adapter(proxy, &adapter),
                        context: "Creating the tunnel")
         defer { adapter_free(adapter) }
 
-        var rsdPort: UInt16 = 0
-        try Self.check(core_device_proxy_get_server_rsd_port(proxy, &rsdPort),
-                       context: "Finding the service port")
-
         var stream: OpaquePointer?
         try Self.check(adapter_connect(adapter, rsdPort, &stream),
                        context: "Connecting to the service port")
 
+        // The handshake takes the stream.
         var handshake: OpaquePointer?
         try Self.check(rsd_handshake_new(stream, &handshake),
                        context: "Handshaking with the device")
         defer { rsd_handshake_free(handshake) }
 
+        // Borrows the adapter and the handshake, so both are still ours.
         var server: OpaquePointer?
         try Self.check(remote_server_connect_rsd(adapter, handshake, &server),
                        context: "Opening the developer server")
