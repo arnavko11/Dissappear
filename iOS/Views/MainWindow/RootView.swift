@@ -7,6 +7,7 @@ struct RootView: View {
     @Environment(SimulationViewModel.self) private var simulation
     @Environment(RouteEditorViewModel.self) private var routeEditor
     @Environment(LocationSearchService.self) private var searchService
+    @Environment(RemoteControlClient.self) private var client
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.modelContext) private var context
     @AppStorage(PreferenceKey.didCompleteOnboarding) private var didCompleteOnboarding = false
@@ -61,6 +62,7 @@ struct RootView: View {
                     .padding(.top, 12)
             }
             .overlay(alignment: .top) { tapModeBanner }
+            .overlay(alignment: .bottom) { disconnectedBanner }
             .safeAreaInset(edge: .bottom) { SimulationBar() }
             .navigationTitle("Dissappear")
             .navigationBarTitleDisplayMode(.inline)
@@ -96,6 +98,35 @@ struct RootView: View {
             } label: {
                 Label("More", systemImage: "ellipsis.circle")
             }
+        }
+    }
+
+    /// Without a companion there is no device to spoof, so the app says so
+    /// rather than offering controls that would only move a dot in here.
+    @ViewBuilder
+    private var disconnectedBanner: some View {
+        if let reason = client.unavailableReason {
+            Button {
+                main.section = .remote
+                isLibraryPresented = true
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "antenna.radiowaves.left.and.right.slash")
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Not spoofing").font(.footnote.weight(.semibold))
+                        Text(reason).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right").font(.caption2)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+            .glassPanel(cornerRadius: 16)
+            .padding(.horizontal, 12)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
         }
     }
 
@@ -157,6 +188,7 @@ struct RootView: View {
     /// Returns the app to its default test environment.
     private func resetEnvironment() {
         simulation.resetSession()
+        Task { await client.clearLocation() }
         withAnimation(.easeInOut(duration: 0.2)) {
             main.previewPlace = nil
             main.editingRoute = nil

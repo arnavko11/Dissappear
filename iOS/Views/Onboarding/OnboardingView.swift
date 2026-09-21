@@ -99,22 +99,22 @@ struct OnboardingPage: Identifiable {
             ]),
 
         OnboardingPage(
-            symbol: "iphone.gen3.radiowaves.left.and.right",
-            title: "Two modes, and they differ",
+            symbol: "laptopcomputer.and.iphone",
+            title: "You need a Mac running the companion",
             body: """
-            On its own, this app spoofs the location inside itself — useful for \
-            trying a route out. Paired with the Mac companion, it spoofs the \
-            whole phone.
+            The spoofing is done by the Mac, through Apple's developer location \
+            service. This app is the remote control for it, so until it is \
+            paired it cannot change where you are.
             """,
             bullets: [
-                "In-app only: nothing outside Dissappear is affected",
-                "With the Mac companion: every app on the phone sees it, Maps and Find My included",
-                "Device-wide spoofing needs the Mac plugged in and awake"
+                "No companion, no spoofing — the controls stay switched off",
+                "Once paired, every app on the phone sees the location you pick",
+                "The Mac has to stay awake and connected to the phone"
             ]),
 
         OnboardingPage(
             symbol: "laptopcomputer.and.iphone",
-            title: "Pair the Mac to go device-wide",
+            title: "Pairing takes one code",
             body: """
             Run Dissappear Companion on a Mac on the same network. It finds \
             itself; you type the pairing code it shows once.

@@ -2,6 +2,7 @@ import SwiftData
 import SwiftUI
 
 struct ScenariosPanel: View {
+    @Environment(RemoteControlClient.self) private var client
     @Environment(MainViewModel.self) private var main
     @Environment(SimulationViewModel.self) private var simulation
     @Environment(\.modelContext) private var context
@@ -84,6 +85,10 @@ struct ScenariosPanel: View {
         guard let route = scenario.route, route.waypoints.count > 1 else {
             main.present(AppError(title: "Scenario Not Runnable",
                                   message: "Assign a route with at least two waypoints to this scenario."))
+            return
+        }
+        if let reason = client.unavailableReason {
+            main.present(AppError(title: "No Companion Connected", message: reason))
             return
         }
         main.editingRoute = route

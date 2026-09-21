@@ -14,6 +14,7 @@ struct DissappearApp: App {
     @State private var routeEditor = RouteEditorViewModel()
     @State private var authorization = LocationAuthorizationService()
     @State private var remoteControl = RemoteControlClient()
+    private let bridge = RemoteLocationBridge()
 
     private let container: ModelContainer
 
@@ -39,6 +40,10 @@ struct DissappearApp: App {
                     engine.speedMultiplier = defaultSpeed
                     engine.updateFrequency = updateFrequency
                     PersistenceService(context: container.mainContext).seedIfNeeded()
+                }
+                .task {
+                    // A playing route drives the real device, not a dot in here.
+                    await bridge.run(engine: engine, client: remoteControl)
                 }
         }
         .modelContainer(container)

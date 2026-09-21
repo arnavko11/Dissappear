@@ -2,6 +2,7 @@ import SwiftData
 import SwiftUI
 
 struct RoutesPanel: View {
+    @Environment(RemoteControlClient.self) private var client
     @Environment(MainViewModel.self) private var main
     @Environment(SimulationViewModel.self) private var simulation
     @Environment(\.modelContext) private var context
@@ -89,7 +90,11 @@ struct RoutesPanel: View {
     private func run(_ route: TestRoute) {
         guard route.waypoints.count > 1 else {
             main.present(AppError(title: "Route Needs More Waypoints",
-                                  message: "Add at least two waypoints before running a simulation."))
+                                  message: "Add at least two waypoints before walking it."))
+            return
+        }
+        if let reason = client.unavailableReason {
+            main.present(AppError(title: "No Companion Connected", message: reason))
             return
         }
         show(route)
