@@ -29,6 +29,17 @@ jobs:
       - name: Show toolchain
         run: xcodebuild -version
 
+      - name: Cache idevice
+        if: matrix.scheme == 'Dissappear'
+        uses: actions/cache@v4
+        with:
+          path: Vendor/idevice
+          key: idevice-${{ hashFiles('Scripts/fetch-idevice.sh') }}
+
+      - name: Fetch idevice
+        if: matrix.scheme == 'Dissappear'
+        run: ./Scripts/fetch-idevice.sh
+
       - name: Build ${{ matrix.scheme }}
         run: |
           set -o pipefail
