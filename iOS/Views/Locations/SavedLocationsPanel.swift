@@ -1,9 +1,10 @@
+import CoreLocation
 import SwiftData
 import SwiftUI
 
 struct SavedLocationsPanel: View {
+    @Environment(RemoteControlClient.self) private var client
     @Environment(MainViewModel.self) private var main
-    @Environment(SimulationEngine.self) private var engine
     @Environment(RouteEditorViewModel.self) private var routeEditor
     @Environment(\.modelContext) private var context
     @Query(sort: \SavedLocation.createdAt, order: .reverse) private var locations: [SavedLocation]
@@ -45,10 +46,10 @@ struct SavedLocationsPanel: View {
                         }
                     }
                     .contextMenu {
-                        Button("Set Test Location") {
-                            engine.setFixedLocation(location.coordinate)
-                            main.focus(on: location.coordinate)
+                        Button("Spoof This Location") {
+                            spoof(location.coordinate, name: location.name)
                         }
+                        .disabled(!client.canSpoof)
                         if let route = main.editingRoute {
                             Button("Add to \(route.name)") {
                                 routeEditor.addWaypoint(to: route,
@@ -89,6 +90,17 @@ struct SavedLocationsPanel: View {
                                             coordinate: location.coordinate)
         }
         main.focus(on: location.coordinate)
+    }
+
+    /// Every location change goes to the companion. Setting one only inside
+    /// this app would claim a position the phone is not actually reporting.
+    private func spoof(_ coordinate: CLLocationCoordinate2D, name: String?) {
+        main.focus(on: coordinate)
+        Task {
+            await client.setLocation(latitude: coordinate.latitude,
+                                     longitude: coordinate.longitude,
+                                     name: name)
+        }
     }
 
     private func save() {

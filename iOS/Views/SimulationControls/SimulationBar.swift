@@ -1,3 +1,4 @@
+import CoreLocation
 import SwiftUI
 
 /// Persistent transport bar: the spoofed coordinate on the left, controls on
@@ -6,6 +7,7 @@ struct SimulationBar: View {
     @Environment(MainViewModel.self) private var main
     @Environment(SimulationEngine.self) private var engine
     @Environment(SimulationViewModel.self) private var simulation
+    @Environment(RemoteControlClient.self) private var client
     @AppStorage(PreferenceKey.distanceUnit) private var distanceUnitRaw = DistanceUnit.automatic.rawValue
 
     var body: some View {
@@ -39,7 +41,7 @@ struct SimulationBar: View {
 
     private var summary: some View {
         VStack(alignment: .leading, spacing: 2) {
-            CoordinateDisplay(coordinate: engine.fix?.coordinate)
+            CoordinateDisplay(coordinate: spoofedCoordinate)
             if let route = engine.route {
                 Text("\(route.name) · \(formatting.distance(engine.remainingDistance)) left · \(formatting.duration(engine.estimatedTimeRemaining))")
                     .font(.caption)
@@ -63,7 +65,7 @@ struct SimulationBar: View {
                 }
                 .glassButton(prominent: true)
                 .keyboardShortcut(.space, modifiers: [])
-                .disabled(!simulation.canStart)
+                .disabled(!simulation.canStart || !client.canSpoof)
                 .accessibilityLabel(engine.phase == .running ? "Pause" : "Start spoofing")
 
                 Button {
@@ -72,7 +74,7 @@ struct SimulationBar: View {
                     Image(systemName: "arrow.counterclockwise").frame(width: 26, height: 22)
                 }
                 .glassButton()
-                .disabled(!simulation.canStart)
+                .disabled(!simulation.canStart || !client.canSpoof)
                 .accessibilityLabel("Restart")
 
                 Button {
@@ -88,6 +90,14 @@ struct SimulationBar: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: engine.phase)
+    }
+
+    /// What the phone is reporting: the route's current point while one is
+    /// playing, otherwise whatever the companion says is set on the device.
+    private var spoofedCoordinate: CLLocationCoordinate2D? {
+        if let fix = engine.fix { return fix.coordinate }
+        guard let status = client.status, status.simulating else { return nil }
+        return CLLocationCoordinate2D(latitude: status.latitude, longitude: status.longitude)
     }
 
     private var formatting: MeasurementFormatting {

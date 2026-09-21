@@ -53,7 +53,7 @@ struct SettingsView: View {
             } header: {
                 Text("Simulation")
             } footer: {
-                Text("On its own, this app spoofs the location inside itself only — other apps still see real GPS. Pair the Mac companion under Remote to spoof the whole phone, where every app sees the coordinate you pick.")
+                Text("Locations are applied by the Mac companion, so every app on this phone sees them. Without a paired companion nothing here can change your location, and the controls stay switched off.")
             }
 
             Section {

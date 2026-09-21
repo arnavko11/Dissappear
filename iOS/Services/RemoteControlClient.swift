@@ -75,6 +75,23 @@ final class RemoteControlClient {
         return discovered != nil || !host.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    /// A companion answered and is not in trouble. Nothing in this app may
+    /// change a location unless this is true: without a companion there is no
+    /// device to spoof, and a location set only inside this app would be a
+    /// lie about what the phone is reporting.
+    var isConnected: Bool { status != nil && trouble == nil }
+
+    /// The companion is connected and has a device it can actually spoof.
+    var canSpoof: Bool { isConnected && (status?.ready ?? false) }
+
+    /// Why spoofing is unavailable, in one line, or nil when it is available.
+    var unavailableReason: String? {
+        if !isConfigured { return "Pick your Mac under Remote and enter its pairing code." }
+        if !isConnected { return "Not connected to the companion on your Mac." }
+        if status?.ready != true { return "The companion has no iPhone it can spoof. Check the cable and Developer Mode." }
+        return nil
+    }
+
     // MARK: - Calls
 
     func refresh() async {
@@ -100,6 +117,25 @@ final class RemoteControlClient {
                 return SavedPlace(name: name, latitude: latitude, longitude: longitude)
             }
             lastError = nil
+            trouble = nil
+        } catch {
+            record(error)
+        }
+    }
+
+    /// Sends a coordinate without the status round trip that follows an
+    /// explicit change. Used while a route is playing, where a refresh per
+    /// point would triple the traffic for nothing.
+    func push(latitude: Double, longitude: Double, name: String?) async {
+        guard isConfigured else { return }
+
+        var payload: [String: Any] = ["latitude": latitude, "longitude": longitude]
+        if let name { payload["name"] = name }
+
+        do {
+            _ = try await send(method: "POST", path: "/location",
+                               body: try JSONSerialization.data(withJSONObject: payload))
+            lastSent = (latitude, longitude, name)
             trouble = nil
         } catch {
             record(error)
