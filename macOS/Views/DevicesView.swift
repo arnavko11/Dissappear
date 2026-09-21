@@ -144,6 +144,16 @@ struct DeviceDetailView: View {
                         Text("Replaces the location this iPhone reports to every app on it — Maps, Find My, anything. It runs through Apple's own developer location service, so Developer Mode has to be on and the device has to trust this Mac. Pick where to appear in Locations, or a path to walk in Routes. Stop Spoofing puts real GPS back. Unplugging does not: the coordinate stays in force until it is cleared or the phone restarts. To keep control of it without the cable, turn on Wi-Fi sync for this phone in Finder — the companion will then reach it over the network.")
                     }
 
+                    Section {
+                        Button("Export Pairing Record…") {
+                            Task { await model.exportPairingRecordWithSavePanel() }
+                        }
+                        .disabled(model.isBusy || model.locationTooling.tool == nil)
+                    } header: {
+                        Text("Pairing Record")
+                    } footer: {
+                        Text("The trust this iPhone placed in this Mac, as a file. Apps that spoof from the phone alone — with no computer present — still need this once, because nothing on the phone may open its own developer services without it. Treat it as a credential: anyone holding it can reach this device's developer services.")
+                    }
                 }
                 .formStyle(.grouped)
 

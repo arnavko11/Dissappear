@@ -29,6 +29,22 @@ jobs:
       - name: Show toolchain
         run: xcodebuild -version
 
+      - name: Cache idevice
+        uses: actions/cache@v4
+        with:
+          path: Vendor/idevice
+          key: idevice-${{ hashFiles('Scripts/fetch-idevice.sh') }}
+
+      # Unconditional: a skipped fetch shows up as "idevice.h not found"
+      # three steps later, which reads like a source problem and is not one.
+      - name: Fetch idevice
+        run: |
+          ./Scripts/fetch-idevice.sh
+          test -f Vendor/idevice/include/idevice.h
+          test -f Vendor/idevice/ios-arm64/libidevice_ffi.a
+          test -f Vendor/idevice/ios-simulator/libidevice_ffi.a
+          ls -la Vendor/idevice
+
       - name: Build ${{ matrix.scheme }}
         run: |
           set -o pipefail

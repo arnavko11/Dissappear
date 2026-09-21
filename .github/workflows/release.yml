@@ -29,6 +29,19 @@ jobs:
       - name: Show toolchain
         run: xcodebuild -version
 
+      - name: Cache idevice
+        uses: actions/cache@v4
+        with:
+          path: Vendor/idevice
+          key: idevice-${{ hashFiles('Scripts/fetch-idevice.sh') }}
+
+      - name: Fetch idevice
+        run: |
+          ./Scripts/fetch-idevice.sh
+          test -f Vendor/idevice/include/idevice.h
+          test -f Vendor/idevice/ios-arm64/libidevice_ffi.a
+          test -f Vendor/idevice/ios-simulator/libidevice_ffi.a
+
       - name: Build iOS app for device (unsigned)
         run: |
           set -o pipefail

@@ -78,6 +78,7 @@ final class CompanionModel: ObservableObject {
     fileprivate let wakeAssertion = WakeAssertion()
     fileprivate let meshNetwork = MeshNetworkService()
     fileprivate let firewall = FirewallService()
+    fileprivate let pairingRecords = PairingRecordService()
     private let libraryStore: LibraryStore
 
     fileprivate var bundleIdentifier = "com.dissappear.testapp"
@@ -703,6 +704,60 @@ extension CompanionModel {
         }
         Preferences.anisetteServerString = server.address
         appendLog("Using anisette server \(server.name) — \(server.address)")
+    }
+
+    /// Writes the device's pairing record to a file.
+    ///
+    /// This is the one thing a computer is needed for if the phone is ever to
+    /// drive its own developer services: the record is the trust iOS
+    /// established when the device was paired, and nothing can forge it.
+    func exportPairingRecord(to destination: URL) async {
+        guard let device = selectedDevice else {
+            error = CompanionError(title: "No iPhone Connected",
+                                   details: "A pairing record belongs to a specific device.",
+                                   recommendedAction: "Connect an iPhone over USB, unlock it, and try again.",
+                                   technicalDetails: "devices = \(devices.count)")
+            return
+        }
+        guard let tool = locationTooling.tool else {
+            error = CompanionError(title: "pymobiledevice3 Not Installed",
+                                   details: "Exporting the pairing record needs it.",
+                                   recommendedAction: LocationSimulationService.installGuidance,
+                                   technicalDetails: "locationTooling = notInstalled")
+            return
+        }
+
+        isBusy = true
+        activity = "Exporting the pairing record"
+        defer { isBusy = false; activity = nil }
+
+        do {
+            try await pairingRecords.export(device: device, tool: tool, to: destination) { [weak self] line in
+                Task { @MainActor in self?.appendLog(line) }
+            }
+            appendLog("Pairing record written to \(destination.path)")
+        } catch let failure as CompanionError {
+            error = failure
+        } catch {
+            self.error = .generic("Exporting the pairing record failed", error)
+        }
+    }
+
+    /// Asks where to put the record, then writes it there.
+    func exportPairingRecordWithSavePanel() async {
+        let panel = NSSavePanel()
+        panel.title = "Export Pairing Record"
+        panel.nameFieldStringValue = suggestedPairingRecordName
+        panel.canCreateDirectories = true
+        panel.message = "This file lets an app on the phone open the phone's own developer services. Keep it as you would a password."
+
+        guard await panel.begin() == .OK, let url = panel.url else { return }
+        await exportPairingRecord(to: url)
+    }
+
+    /// A filename for the selected device's pairing record.
+    var suggestedPairingRecordName: String {
+        selectedDevice.map(PairingRecordService.suggestedFilename) ?? "device.mobiledevicepairing"
     }
 
     /// Installs pymobiledevice3 into a private environment this app owns, so

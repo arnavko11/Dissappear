@@ -14,18 +14,46 @@ them. Spoof phones you own.
 | `Dissappear` | iOS 17+ | The phone app: pick places, walk routes, steer the Mac remotely |
 | `DissappearCompanion` | macOS 14+ | Does the spoofing. Sets up the tooling, holds the developer session, serves the controls to the phone |
 
-Open `Dissappear.xcodeproj` in Xcode 26 or later.
+Open `Dissappear.xcodeproj` in Xcode 26 or later. Before building the iOS app,
+run `Scripts/fetch-idevice.sh` once — it downloads the library the phone uses to
+drive its own developer services. It is about 190 MB a slice, so it is fetched
+rather than committed, and `Vendor/` is ignored.
 
-## Two modes
+## Two ways to reach the phone
 
-| Mode | What sees the spoofed location |
-| --- | --- |
-| **iPhone app alone** | Dissappear itself, for trying a route out |
-| **iPhone app + Mac companion** | Every app on the phone — Maps, Find My, anything |
+Either way the spoof is device-wide: every app on the phone sees it.
 
-Device-wide spoofing lasts as long as the Mac holds the session, so the Mac has
-to stay awake and the phone connected. The companion holds off idle sleep for
-you while a session is live.
+| Route | Needs | Works |
+| --- | --- | --- |
+| **On the phone itself** | A pairing record, and a loopback VPN | Anywhere, no computer present |
+| **Through the Mac companion** | The Mac to reach the phone over USB or the local network | Only while both are together |
+
+The phone's own route is preferred whenever a pairing record has been imported,
+because the Mac cannot follow you out of the door.
+
+### Spoofing without a computer
+
+iOS only opens its developer services to something the device already trusts,
+and that trust is established by a computer — once. After that the phone can do
+it alone, which is how this works away from home.
+
+1. In the companion, under **Devices**, choose **Export Pairing Record**. Keep
+   the file private: anything holding it can reach that device's developer
+   services.
+2. On the phone, install and connect a loopback VPN — [StosVPN] or
+   LocalDevVPN. iOS will not let an app reach its own device's services
+   directly, so one of these has to publish a local address that routes back.
+3. In Dissappear's Settings, **Import Pairing Record**. The **Spoofing Through**
+   row should then read *This iPhone*.
+
+If the connection is refused, the loopback address in Settings is the first
+thing to check — the default is StosVPN's.
+
+[StosVPN]: https://github.com/StephenDev0/StosVPN
+
+Through the companion instead, the spoof lasts as long as the Mac holds the
+session, so the Mac has to stay awake and the phone reachable. The companion
+holds off idle sleep for you while a session is live.
 
 ## Getting started
 

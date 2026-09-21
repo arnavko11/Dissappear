@@ -100,16 +100,16 @@ struct OnboardingPage: Identifiable {
 
         OnboardingPage(
             symbol: "laptopcomputer.and.iphone",
-            title: "You need a Mac running the companion",
+            title: "A computer is needed once",
             body: """
-            The spoofing is done by the Mac, through Apple's developer location \
-            service. This app is the remote control for it, so until it is \
-            paired it cannot change where you are.
+            iOS only opens its developer services to something it already \
+            trusts, and that trust is established by a computer. Once, though: \
+            after that the phone can do it alone.
             """,
             bullets: [
-                "No companion, no spoofing — the controls stay switched off",
-                "Once paired, every app on the phone sees the location you pick",
-                "The Mac has to stay awake and connected to the phone"
+                "Export a pairing record from the Mac companion, and import it here",
+                "Then this phone spoofs itself, anywhere, with no Mac nearby",
+                "Without a record, a Mac on the same network can do it instead"
             ]),
 
         OnboardingPage(

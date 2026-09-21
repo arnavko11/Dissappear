@@ -6,3 +6,6 @@ xcuserdata/
 
 # Generated into the companion by the release workflow
 macOS/Resources/BundledApp.ipa
+
+# Downloaded by Scripts/fetch-idevice.sh — large, and reproducible.
+Vendor/

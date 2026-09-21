@@ -3,7 +3,7 @@ import SwiftData
 import SwiftUI
 
 struct SavedLocationsPanel: View {
-    @Environment(RemoteControlClient.self) private var client
+    @Environment(SpoofingCoordinator.self) private var spoofing
     @Environment(MainViewModel.self) private var main
     @Environment(RouteEditorViewModel.self) private var routeEditor
     @Environment(\.modelContext) private var context
@@ -49,7 +49,7 @@ struct SavedLocationsPanel: View {
                         Button("Spoof This Location") {
                             spoof(location.coordinate, name: location.name)
                         }
-                        .disabled(!client.canSpoof)
+                        .disabled(!spoofing.canSpoof)
                         if let route = main.editingRoute {
                             Button("Add to \(route.name)") {
                                 routeEditor.addWaypoint(to: route,
@@ -97,9 +97,9 @@ struct SavedLocationsPanel: View {
     private func spoof(_ coordinate: CLLocationCoordinate2D, name: String?) {
         main.focus(on: coordinate)
         Task {
-            await client.setLocation(latitude: coordinate.latitude,
-                                     longitude: coordinate.longitude,
-                                     name: name)
+            await spoofing.spoof(latitude: coordinate.latitude,
+                                 longitude: coordinate.longitude,
+                                 name: name)
         }
     }
 

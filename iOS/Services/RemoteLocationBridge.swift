@@ -17,13 +17,13 @@ final class RemoteLocationBridge {
     private var lastSent: CLLocationCoordinate2D?
 
     /// Runs until cancelled, pushing the engine's fix while a route plays.
-    func run(engine: SimulationEngine, client: RemoteControlClient) async {
+    func run(engine: SimulationEngine, spoofing: SpoofingCoordinator) async {
         while !Task.isCancelled {
             try? await Task.sleep(for: Self.interval)
             guard !Task.isCancelled else { return }
 
             guard engine.phase == .running,
-                  client.isConnected,
+                  spoofing.canSpoof,
                   let fix = engine.fix else { continue }
 
             // Skip a coordinate that has not meaningfully moved, so a paused
@@ -31,9 +31,9 @@ final class RemoteLocationBridge {
             if let lastSent, Self.isNear(lastSent, fix.coordinate) { continue }
             lastSent = fix.coordinate
 
-            await client.push(latitude: fix.coordinate.latitude,
-                              longitude: fix.coordinate.longitude,
-                              name: engine.route?.name)
+            await spoofing.push(latitude: fix.coordinate.latitude,
+                                longitude: fix.coordinate.longitude,
+                                name: engine.route?.name)
         }
     }
 
