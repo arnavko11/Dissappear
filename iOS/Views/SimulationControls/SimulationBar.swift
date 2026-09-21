@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Persistent transport bar: current coordinate on the left, controls on the right.
+/// Persistent transport bar: the spoofed coordinate on the left, controls on
+/// the right.
 struct SimulationBar: View {
     @Environment(MainViewModel.self) private var main
     @Environment(SimulationEngine.self) private var engine
@@ -12,7 +13,7 @@ struct SimulationBar: View {
             if engine.route != nil {
                 ProgressView(value: engine.progress)
                     .progressViewStyle(.linear)
-                    .accessibilityLabel("Simulation progress")
+                    .accessibilityLabel("Route progress")
                     .accessibilityValue("\(Int(engine.progress * 100)) percent")
             }
 
@@ -52,37 +53,39 @@ struct SimulationBar: View {
     private func controls(simulation: SimulationViewModel) -> some View {
         @Bindable var simulation = simulation
 
-        HStack(spacing: 10) {
-            Button {
-                simulation.toggle()
-            } label: {
-                Image(systemName: engine.phase == .running ? "pause.fill" : "play.fill")
-                    .frame(width: 26, height: 22)
-            }
-            .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.space, modifiers: [])
-            .disabled(!simulation.canStart)
-            .accessibilityLabel(engine.phase == .running ? "Pause simulation" : "Start simulation")
+        GlassGroup(spacing: 10) {
+            HStack(spacing: 10) {
+                Button {
+                    simulation.toggle()
+                } label: {
+                    Image(systemName: engine.phase == .running ? "pause.fill" : "play.fill")
+                        .frame(width: 26, height: 22)
+                }
+                .glassButton(prominent: true)
+                .keyboardShortcut(.space, modifiers: [])
+                .disabled(!simulation.canStart)
+                .accessibilityLabel(engine.phase == .running ? "Pause" : "Start spoofing")
 
-            Button {
-                simulation.restart()
-            } label: {
-                Image(systemName: "arrow.counterclockwise").frame(width: 26, height: 22)
-            }
-            .buttonStyle(.bordered)
-            .disabled(!simulation.canStart)
-            .accessibilityLabel("Restart simulation")
+                Button {
+                    simulation.restart()
+                } label: {
+                    Image(systemName: "arrow.counterclockwise").frame(width: 26, height: 22)
+                }
+                .glassButton()
+                .disabled(!simulation.canStart)
+                .accessibilityLabel("Restart")
 
-            Button {
-                simulation.stop()
-            } label: {
-                Image(systemName: "stop.fill").frame(width: 26, height: 22)
-            }
-            .buttonStyle(.bordered)
-            .disabled(!engine.isActive)
-            .accessibilityLabel("Stop simulation")
+                Button {
+                    simulation.stop()
+                } label: {
+                    Image(systemName: "stop.fill").frame(width: 26, height: 22)
+                }
+                .glassButton()
+                .disabled(!engine.isActive)
+                .accessibilityLabel("Stop spoofing")
 
-            SpeedControl(speed: $simulation.speed)
+                SpeedControl(speed: $simulation.speed)
+            }
         }
         .animation(.easeInOut(duration: 0.15), value: engine.phase)
     }

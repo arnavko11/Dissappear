@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Steers the simulated location on the device from the phone itself, with the
-/// Mac holding the developer session somewhere else on the network.
+/// Steers the device-wide spoofed location from the phone itself, with the Mac
+/// holding the developer session somewhere else on the network.
 struct RemoteControlView: View {
     @Environment(RemoteControlClient.self) private var client
     @Environment(MainViewModel.self) private var main
@@ -59,9 +59,17 @@ struct RemoteControlView: View {
                         .keyboardType(.numberPad)
                 }
                 LabeledContent("Pairing Code") {
-                    TextField("000000", text: $client.pairingCode)
+                    TextField("ABCD2345", text: $client.pairingCode)
                         .multilineTextAlignment(.trailing)
-                        .keyboardType(.numberPad)
+                        .font(.body.monospaced())
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.characters)
+                        .onChange(of: client.pairingCode) { _, value in
+                            let normalised = String(value.uppercased()
+                                .filter { $0.isLetter || $0.isNumber }
+                                .prefix(8))
+                            if normalised != value { client.pairingCode = normalised }
+                        }
                 }
                 Button("Connect") { Task { await client.refresh() } }
                     .disabled(!client.isConfigured || client.isBusy)
@@ -77,7 +85,7 @@ struct RemoteControlView: View {
                     case let .unreachable(message):
                         InlineMessage(text: "Cannot reach the companion. \(message)",
                                       systemImage: "wifi.exclamationmark", tint: .orange)
-                        Text("The Mac may be asleep or off this network. Simulation stops when the companion does.")
+                        Text("The Mac may be asleep or off this network. Device-wide spoofing stops when the companion does.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     case let .refused(message):
@@ -107,7 +115,7 @@ struct RemoteControlView: View {
             if let status = client.status {
                 Section("Status") {
                     LabeledContent("Mac Sees", value: status.device.isEmpty ? "No device" : status.device)
-                    LabeledContent("Simulating", value: status.simulating ? "Yes" : "No")
+                    LabeledContent("Spoofing", value: status.simulating ? "Yes" : "No")
                     if status.simulating {
                         LabeledContent("Coordinate",
                                        value: String(format: "%.5f, %.5f", status.latitude, status.longitude))
@@ -116,7 +124,7 @@ struct RemoteControlView: View {
                         }
                     }
                     if !status.ready {
-                        InlineMessage(text: "The companion cannot simulate right now. Check the device connection on the Mac.",
+                        InlineMessage(text: "The companion cannot spoof right now. Check the iPhone's connection to the Mac, and that Developer Mode is on.",
                                       tint: .orange)
                     }
                 }

@@ -9,8 +9,10 @@ struct RootView: View {
     @Environment(LocationSearchService.self) private var searchService
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.modelContext) private var context
+    @AppStorage(PreferenceKey.didCompleteOnboarding) private var didCompleteOnboarding = false
     @State private var isLibraryPresented = false
     @State private var isSettingsPresented = false
+    @State private var isOnboardingPresented = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
@@ -35,12 +37,19 @@ struct RootView: View {
         .sheet(isPresented: $isSettingsPresented) {
             NavigationStack { SettingsView() }
         }
+        .fullScreenCover(isPresented: $isOnboardingPresented) {
+            OnboardingView()
+        }
         .alert(main.error?.title ?? "Error", isPresented: isErrorPresented, presenting: main.error) { _ in
             Button("OK", role: .cancel) { main.error = nil }
         } message: { error in
             Text(error.message)
         }
-        .task { await main.beginSession() }
+        .task {
+            // Nobody should reach the map without being told what this app does.
+            if !didCompleteOnboarding { isOnboardingPresented = true }
+            await main.beginSession()
+        }
     }
 
     private var workspace: some View {
@@ -53,7 +62,7 @@ struct RootView: View {
             }
             .overlay(alignment: .top) { tapModeBanner }
             .safeAreaInset(edge: .bottom) { SimulationBar() }
-            .navigationTitle("Location Tester")
+            .navigationTitle("Dissappear")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
     }
@@ -75,8 +84,14 @@ struct RootView: View {
                 } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
+                Button {
+                    isOnboardingPresented = true
+                } label: {
+                    Label("What This App Does", systemImage: "questionmark.circle")
+                }
+                Divider()
                 Button(role: .destructive, action: resetEnvironment) {
-                    Label("Reset Test Environment", systemImage: "arrow.counterclockwise.circle")
+                    Label("Reset Spoofed Location", systemImage: "arrow.counterclockwise.circle")
                 }
             } label: {
                 Label("More", systemImage: "ellipsis.circle")

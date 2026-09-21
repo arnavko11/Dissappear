@@ -25,18 +25,20 @@ struct MapOverlayControls: View {
             }
             .accessibilityLabel("Map style")
 
+            // One glass shape for the pair, rather than a glass pill holding
+            // two more glass pills.
             VStack(spacing: 0) {
-                Button { zoom(by: 0.5) } label: { controlIcon("plus") }
+                Button { zoom(by: 0.5) } label: { plainIcon("plus") }
                     .accessibilityLabel("Zoom in")
-                Divider().frame(width: 28)
-                Button { zoom(by: 2) } label: { controlIcon("minus") }
+                Divider().frame(width: 24)
+                Button { zoom(by: 2) } label: { plainIcon("minus") }
                     .accessibilityLabel("Zoom out")
             }
             .glassPanel(cornerRadius: 18, interactive: true)
 
             if engine.fix != nil {
                 Button(action: recenter) { controlIcon("scope") }
-                    .accessibilityLabel("Centre on simulated location")
+                    .accessibilityLabel("Centre on the spoofed location")
             }
         }
         .buttonStyle(.plain)
@@ -44,9 +46,13 @@ struct MapOverlayControls: View {
     }
 
     private func controlIcon(_ name: String) -> some View {
+        plainIcon(name).glassPanel(cornerRadius: 18, interactive: true)
+    }
+
+    private func plainIcon(_ name: String) -> some View {
         Image(systemName: name)
             .frame(width: 36, height: 36)
-            .glassPanel(cornerRadius: 18, interactive: true)
+            .contentShape(.rect)
     }
 
     private func zoom(by factor: Double) {

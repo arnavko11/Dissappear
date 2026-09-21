@@ -87,20 +87,59 @@ struct DeviceDetailView: View {
                         }
                     }
 
-                    Section("Device Location") {
-                        StatusRow(label: "Simulation Tool",
+                    Section {
+                        StatusRow(label: "Spoofing Tool",
                                   value: model.locationTooling.displayName,
-                                  state: model.locationTooling.tool == nil ? .warning : .good)
-                        StatusRow(label: "Current Location",
+                                  state: model.locationTooling.tool == nil ? .bad : .good)
+                        StatusRow(label: "Reported Location",
                                   value: deviceLocationValue,
                                   state: model.deviceLocation == nil ? .inactive : .good)
-                        Button("Prepare Developer Services") {
-                            Task { await model.prepareDeviceForLocation() }
+                        StatusRow(label: "Developer Tunnel",
+                                  value: model.isDeveloperTunnelRunning ? "Running" : "Not running",
+                                  state: model.isDeveloperTunnelRunning ? .good : tunnelState)
+
+                        if model.locationTooling.tool == nil {
+                            HStack(spacing: 10) {
+                                Button("Install pymobiledevice3") {
+                                    Task { await model.installLocationTooling() }
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(model.toolingInstallActivity != nil)
+
+                                if let activity = model.toolingInstallActivity {
+                                    ProgressView().controlSize(.small)
+                                    Text(activity).foregroundStyle(.secondary)
+                                }
+                            }
+                            Text("One click. It installs into a private folder this app owns, asks for no password, and touches nothing else on this Mac.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            HStack(spacing: 10) {
+                                Button("Prepare Device") {
+                                    Task { await model.prepareDeviceForLocation() }
+                                }
+                                .disabled(model.isBusy)
+
+                                if needsTunnel {
+                                    Button("Start Developer Tunnel") {
+                                        Task { await model.startDeveloperTunnel() }
+                                    }
+                                    .disabled(model.isBusy)
+                                }
+
+                                if model.deviceLocation != nil {
+                                    Button("Stop Spoofing", role: .destructive) {
+                                        Task { await model.clearDeviceLocation() }
+                                    }
+                                    .disabled(model.isBusy)
+                                }
+                            }
                         }
-                        .disabled(model.locationTooling.tool == nil || model.isBusy)
-                        Text("Sets the location the whole device reports, through Apple's developer location service. Needs Developer Mode and a mounted developer disk image. Choose a location in Locations or a route in Routes.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+                    } header: {
+                        Text("Location Spoofing")
+                    } footer: {
+                        Text("Replaces the location this iPhone reports to every app on it — Maps, Find My, anything. It runs through Apple's own developer location service, so Developer Mode has to be on and the device has to trust this Mac. Pick where to appear in Locations, or a path to walk in Routes. Stop Spoofing puts real GPS back.")
                     }
 
                 }
@@ -160,8 +199,20 @@ struct DeviceDetailView: View {
         .disabled(model.isBusy)
     }
 
+    /// The tunnel only matters for iOS 17 and later going through
+    /// pymobiledevice3; devicectl and older systems do not need it.
+    private var needsTunnel: Bool {
+        guard !model.locationTooling.usesAppleTooling else { return false }
+        let major = Int(device.osVersion.split(separator: ".").first.map(String.init) ?? "") ?? 0
+        return major >= 17
+    }
+
+    private var tunnelState: StatusDot.State {
+        needsTunnel ? .warning : .inactive
+    }
+
     private var deviceLocationValue: String {
-        guard let coordinate = model.deviceLocation else { return "Real location" }
+        guard let coordinate = model.deviceLocation else { return "Real GPS" }
         let name = model.deviceLocationName.map { "\($0) · " } ?? ""
         return name + String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude)
     }

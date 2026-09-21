@@ -11,6 +11,7 @@ enum PreferenceKey {
     static let lastLatitude = "preference.lastLatitude"
     static let lastLongitude = "preference.lastLongitude"
     static let didSeedLibrary = "preference.didSeedLibrary"
+    static let didCompleteOnboarding = "preference.didCompleteOnboarding"
 }
 
 enum MapStyleOption: String, CaseIterable, Identifiable {

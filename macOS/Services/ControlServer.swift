@@ -6,7 +6,8 @@ import Network
 ///
 /// It listens only on the local network, every request must carry the pairing
 /// code shown in the companion, and it exposes nothing but the location
-/// controls. It is off until switched on.
+/// controls. It runs by default, because steering the spoofed location from
+/// the phone is the point of the companion; Settings can switch it off.
 final class ControlServer: @unchecked Sendable {
     struct Request {
         var method: String
@@ -32,10 +33,29 @@ final class ControlServer: @unchecked Sendable {
     /// Bonjour type the iOS app browses for, so neither end needs an address.
     static let serviceType = "_dissappear._tcp"
 
-    private(set) var pairingCode = ""
-    private(set) var port: UInt16 = 0
+    /// Kept across launches so a paired phone does not have to be paired
+    /// again every time the companion restarts.
+    private static let pairingCodeKey = "controlServer.pairingCode"
+
+    private var storedPairingCode = ""
+    private var storedPort: UInt16 = 0
+
+    var pairingCode: String {
+        lock.lock(); defer { lock.unlock() }
+        return storedPairingCode
+    }
+
+    var port: UInt16 {
+        lock.lock(); defer { lock.unlock() }
+        return storedPort
+    }
 
     var handler: (@Sendable (Request) async -> Response)?
+
+    /// Called when the listener becomes ready or fails. `start()` returning
+    /// only means the listener was created, so the UI waits for this rather
+    /// than claiming to be listening before it is.
+    var onStateChange: (@Sendable (Result<UInt16, Error>) -> Void)?
 
     var isRunning: Bool {
         lock.lock(); defer { lock.unlock() }
@@ -69,14 +89,45 @@ final class ControlServer: @unchecked Sendable {
     func start(preferredPort: UInt16 = 8787) throws {
         stop()
 
-        // Unambiguous characters only: this gets typed on a phone.
-        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
-        pairingCode = String((0..<8).map { _ in alphabet.randomElement() ?? "A" })
+        let defaults = UserDefaults.standard
+        let existing = defaults.string(forKey: Self.pairingCodeKey) ?? ""
+        let code = existing.count == 8 ? existing : Self.makePairingCode()
+        defaults.set(code, forKey: Self.pairingCodeKey)
 
+        lock.lock()
+        storedPairingCode = code
+        lock.unlock()
+
+        try listen(on: preferredPort, allowFallback: true)
+    }
+
+    /// Replaces the pairing code, so a code shared earlier stops working.
+    func rotatePairingCode() {
+        let code = Self.makePairingCode()
+        UserDefaults.standard.set(code, forKey: Self.pairingCodeKey)
+        lock.lock()
+        storedPairingCode = code
+        lock.unlock()
+    }
+
+    /// Unambiguous characters only: this gets typed on a phone.
+    private static func makePairingCode() -> String {
+        let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+        return String((0..<8).map { _ in alphabet.randomElement() ?? "A" })
+    }
+
+    /// `allowFallback` retries once on a kernel-assigned port, so another
+    /// process already holding 8787 cannot leave the server silently dead —
+    /// the old code reported success and then never listened.
+    private func listen(on preferredPort: UInt16, allowFallback: Bool) throws {
         let parameters = NWParameters.tcp
         parameters.includePeerToPeer = false
-        let listener = try NWListener(using: parameters,
-                                      on: NWEndpoint.Port(rawValue: preferredPort) ?? .any)
+        parameters.allowLocalEndpointReuse = true
+
+        let endpoint = preferredPort == 0
+            ? NWEndpoint.Port.any
+            : (NWEndpoint.Port(rawValue: preferredPort) ?? .any)
+        let listener = try NWListener(using: parameters, on: endpoint)
 
         // Announce over Bonjour so the phone can find this Mac by itself.
         listener.service = NWListener.Service(name: Host.current().localizedName ?? "Dissappear Companion",
@@ -86,8 +137,26 @@ final class ControlServer: @unchecked Sendable {
             self?.accept(connection)
         }
         listener.stateUpdateHandler = { [weak self] state in
-            if case .ready = state, let assigned = listener.port?.rawValue {
-                self?.port = assigned
+            guard let self else { return }
+            switch state {
+            case .ready:
+                let assigned = listener.port?.rawValue ?? preferredPort
+                self.lock.lock()
+                let isCurrent = self.listener === listener
+                if isCurrent { self.storedPort = assigned }
+                self.lock.unlock()
+                if isCurrent { self.onStateChange?(.success(assigned)) }
+
+            case let .failed(error):
+                self.handleFailure(error, listener: listener,
+                                   preferredPort: preferredPort, allowFallback: allowFallback)
+
+            case let .waiting(error) where Self.isFatal(error):
+                self.handleFailure(error, listener: listener,
+                                   preferredPort: preferredPort, allowFallback: allowFallback)
+
+            default:
+                break
             }
         }
         listener.start(queue: queue)
@@ -95,6 +164,33 @@ final class ControlServer: @unchecked Sendable {
         lock.lock()
         self.listener = listener
         lock.unlock()
+    }
+
+    private func handleFailure(_ error: NWError,
+                               listener: NWListener,
+                               preferredPort: UInt16,
+                               allowFallback: Bool) {
+        lock.lock()
+        let isCurrent = self.listener === listener
+        lock.unlock()
+        guard isCurrent else { return }
+        stop()
+
+        if allowFallback, preferredPort != 0 {
+            do { try listen(on: 0, allowFallback: false) }
+            catch { onStateChange?(.failure(error)) }
+        } else {
+            onStateChange?(.failure(error))
+        }
+    }
+
+    /// A busy port surfaces as `.waiting(POSIXErrorCode: Address already in use)`
+    /// and never resolves itself, so it is treated as a failure to retry.
+    private static func isFatal(_ error: NWError) -> Bool {
+        if case let .posix(code) = error {
+            return code == .EADDRINUSE || code == .EACCES || code == .EADDRNOTAVAIL
+        }
+        return false
     }
 
     func stop() {
@@ -107,7 +203,10 @@ final class ControlServer: @unchecked Sendable {
 
         existing?.cancel()
         open.values.forEach { $0.cancel() }
-        port = 0
+
+        lock.lock()
+        storedPort = 0
+        lock.unlock()
     }
 
     // MARK: - Connections
@@ -146,7 +245,8 @@ final class ControlServer: @unchecked Sendable {
     }
 
     private func respond(to request: Request, headers: [String: String]) async -> Response {
-        guard headers["x-pair-code"] == pairingCode else {
+        let expected = pairingCode
+        guard !expected.isEmpty, headers["x-pair-code"] == expected else {
             return .error(401, "Wrong pairing code.")
         }
         guard let handler else {

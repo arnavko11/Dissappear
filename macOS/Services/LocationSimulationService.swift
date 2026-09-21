@@ -1,15 +1,16 @@
 import Foundation
 
-/// Sets the simulated location on a connected device using Apple's own
-/// developer location service — the one behind Xcode's Simulate Location.
+/// Spoofs the location of a connected iPhone using Apple's own developer
+/// location service — the one behind Xcode's Simulate Location.
 ///
-/// This is device-wide: every app on the phone sees the simulated coordinate
-/// while it is active, and `clear` returns the device to real GPS. It requires
-/// Developer Mode, a trusted Mac and a mounted developer disk image, so it is
-/// visible to the device's owner rather than hidden from them.
+/// This is device-wide: every app on the phone, Maps and Find My included,
+/// sees the spoofed coordinate while it is active, and `clear` returns the
+/// device to real GPS. It requires Developer Mode, a trusted Mac and a mounted
+/// developer disk image, so it is visible to the device's owner rather than
+/// hidden from them.
 ///
-/// The service is reached through pymobiledevice3, an open source client the
-/// user installs. Nothing is bundled or downloaded by this app.
+/// The service is reached through pymobiledevice3, an open source client. The
+/// companion can install it into a private environment it owns.
 struct LocationSimulationService {
     struct Tool: Equatable, Sendable {
         var executablePath: String
@@ -43,24 +44,44 @@ struct LocationSimulationService {
         }
     }
 
-    private static let candidatePaths = [
+    private static var candidatePaths: [String] = [
+        // The copy this app installs itself is preferred: its version is known
+        // to work with the commands below.
+        PyMobileDevice3Installer.executableURL.path,
         "/opt/homebrew/bin/pymobiledevice3",
         "/usr/local/bin/pymobiledevice3",
         "/opt/homebrew/opt/pymobiledevice3/bin/pymobiledevice3"
     ]
 
     static let installGuidance = """
-    Install pymobiledevice3, the open source client for Apple's developer \
-    services: brew install pymobiledevice3, or pipx install pymobiledevice3.
+    Use Install pymobiledevice3 to set it up automatically — it goes into a \
+    private folder this app owns and needs no administrator rights. By hand: \
+    brew install pymobiledevice3, or pipx install pymobiledevice3.
     """
 
     static let tunnelGuidance = """
     iOS 17 and later reach the developer service over a tunnel that needs \
-    administrator rights, which this app does not ask for. Run this once per \
-    restart in Terminal and leave it running:
+    administrator rights. Use Start Developer Tunnel — macOS will ask for your \
+    password. By hand, run this once per restart and leave it running:
 
     sudo pymobiledevice3 remote tunneld
     """
+
+    /// Port `pymobiledevice3 remote tunneld` binds by default.
+    private static let tunneldPort = 49151
+
+    /// A held session, or a latched one.
+    ///
+    /// Older builds assumed the tool always stays running. It does not:
+    /// `simulate-location set` latches the coordinate on the device and exits,
+    /// and the spoof then lasts until it is cleared. Treating that exit as a
+    /// lost session is what made the UI announce "the simulation stopped"
+    /// seconds after a location was set successfully.
+    struct Session: Equatable, Sendable {
+        /// Set only while a process is holding the session open.
+        var handle: UUID?
+        var isHeld: Bool { handle != nil }
+    }
 
     private let runner = ProcessRunner.shared
 
@@ -90,11 +111,16 @@ struct LocationSimulationService {
             return nil
         }
         let path = found.standardOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !path.isEmpty,
-              let help = try? await runner.run(path, ["device", "--help"]), help.succeeded else { return nil }
+        guard !path.isEmpty else { return nil }
 
-        let output = help.combinedOutput.lowercased()
-        guard output.contains("location") else { return nil }
+        // The old check looked for the word "location" anywhere in `device
+        // --help`, which matches Xcode versions that have no location verb at
+        // all — every later command then failed. Ask for the subcommand
+        // itself instead; an Xcode without it exits non-zero here.
+        guard let help = try? await runner.run(path, ["device", "location", "--help"]),
+              help.succeeded,
+              help.combinedOutput.lowercased().contains("location") else { return nil }
+
         return Tool(executablePath: path, version: "devicectl")
     }
 
@@ -109,27 +135,26 @@ struct LocationSimulationService {
         }
     }
 
-    /// Starts a simulation session and returns its handle.
+    /// Spoofs the device's location and returns the resulting session.
     ///
-    /// The developer location tool does not exit after setting a location: it
-    /// holds the session open, and the simulation lasts as long as that session
-    /// does. So the process is kept running and stopped explicitly, rather than
-    /// waited on.
+    /// Some tool versions hold the session open for as long as the spoof
+    /// should last; others latch it on the device and exit. Both are success,
+    /// and the returned session says which happened.
     @discardableResult
     func beginSession(latitude: Double,
                       longitude: Double,
                       device: Device,
                       tool: Tool,
-                      onOutputLine: @escaping @Sendable (String) -> Void) async throws -> UUID {
+                      onOutputLine: @escaping @Sendable (String) -> Void) async throws -> Session {
         let coordinates = [String(format: "%.6f", latitude), String(format: "%.6f", longitude)]
 
         if tool.version == "devicectl" {
             try await runSimulateLocation(["set", "--"] + coordinates,
                                           device: device,
                                           tool: tool,
-                                          stage: "Setting the device location",
+                                          stage: "Spoofing the device location",
                                           onOutputLine: onOutputLine)
-            return UUID()
+            return Session(handle: nil)
         }
 
         let arguments = ["developer", "dvt", "simulate-location", "set", "--udid", device.udid, "--"] + coordinates
@@ -138,14 +163,78 @@ struct LocationSimulationService {
         // Give it a moment to fail loudly, rather than reporting success for a
         // session that died on launch.
         try? await Task.sleep(for: .seconds(2))
-        if let status = await runner.exitStatus(handle), status != 0 {
+        if let status = await runner.exitStatus(handle) {
             await runner.stop(handle)
-            throw CompanionError(title: "Setting the device location failed",
-                                 details: "The developer location tool exited with code \(status).",
-                                 recommendedAction: Self.tunnelGuidance,
-                                 technicalDetails: "\(tool.executablePath) \(arguments.joined(separator: " "))")
+            guard status == 0 else {
+                // Retry through the tunnel, which is what iOS 17 and later need.
+                let tunnelled = try await runner.run(
+                    tool.executablePath,
+                    ["developer", "dvt", "simulate-location", "set", "--tunnel", device.udid, "--"] + coordinates,
+                    onOutputLine: onOutputLine)
+                if tunnelled.succeeded { return Session(handle: nil) }
+                throw Self.error(stage: "Spoofing the device location", result: tunnelled)
+            }
+            // Exited cleanly: the coordinate is latched on the device.
+            return Session(handle: nil)
         }
-        return handle
+        return Session(handle: handle)
+    }
+
+    // MARK: - Developer tunnel
+
+    /// Whether `pymobiledevice3 remote tunneld` is already answering.
+    func isTunnelRunning() async -> Bool {
+        guard let url = URL(string: "http://127.0.0.1:\(Self.tunneldPort)/") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 1.5
+        return (try? await URLSession.shared.data(for: request)) != nil
+    }
+
+    /// Starts the tunnel daemon, asking macOS for administrator rights through
+    /// the standard password panel instead of sending the user to Terminal.
+    func startTunnel(tool: Tool) async throws {
+        guard tool.version != "devicectl" else { return }
+        if await isTunnelRunning() { return }
+
+        let log = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dissappear-tunneld.log").path
+        let command = "nohup " + Self.shellQuoted(tool.executablePath)
+            + " remote tunneld > " + Self.shellQuoted(log) + " 2>&1 &"
+        let script = "do shell script " + Self.appleScriptQuoted(command)
+            + " with administrator privileges"
+
+        let result = try await runner.run("/usr/bin/osascript", ["-e", script])
+        guard result.succeeded else {
+            if result.combinedOutput.localizedCaseInsensitiveContains("cancel") {
+                throw CompanionError(title: "Developer Tunnel Not Started",
+                                     details: "The administrator prompt was cancelled.",
+                                     recommendedAction: "The tunnel needs administrator rights because it opens a network interface. Try again, or run it yourself: sudo pymobiledevice3 remote tunneld",
+                                     technicalDetails: result.combinedOutput)
+            }
+            throw Self.error(stage: "Starting the developer tunnel", result: result)
+        }
+
+        // The daemon takes a moment to bind before it will answer.
+        for _ in 0..<10 {
+            if await isTunnelRunning() { return }
+            try? await Task.sleep(for: .milliseconds(600))
+        }
+        throw CompanionError(title: "Developer Tunnel Did Not Answer",
+                             details: "The tunnel daemon started but is not listening on port \(Self.tunneldPort).",
+                             recommendedAction: "Check \(log) for what it reported, then try again.",
+                             technicalDetails: log)
+    }
+
+    private static func shellQuoted(_ value: String) -> String {
+        let escaped = value.replacingOccurrences(of: "'", with: "'\\''")
+        return "'" + escaped + "'"
+    }
+
+    private static func appleScriptQuoted(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"" + escaped + "\""
     }
 
     func endSession(_ handle: UUID) async {

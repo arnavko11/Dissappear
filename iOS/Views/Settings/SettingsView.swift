@@ -53,7 +53,7 @@ struct SettingsView: View {
             } header: {
                 Text("Simulation")
             } footer: {
-                Text("Simulated fixes are delivered inside this app only. System location for other apps is never modified.")
+                Text("On its own, this app spoofs the location inside itself only — other apps still see real GPS. Pair the Mac companion under Remote to spoof the whole phone, where every app sees the coordinate you pick.")
             }
 
             Section {
