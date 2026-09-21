@@ -37,8 +37,22 @@ mkdir -p "$VENDOR/include" "$VENDOR/ios-arm64" "$VENDOR/ios-simulator"
 
 # Only the two iOS slices are kept; the macOS and Catalyst ones are unused
 # here and together weigh more than twice as much.
-cp "$FRAMEWORK/ios-arm64/libidevice_ffi.a" "$VENDOR/ios-arm64/"
-cp "$FRAMEWORK/ios-arm64_x86_64-simulator/libidevice_ffi.a" "$VENDOR/ios-simulator/"
+#
+# Each slice names its archive differently (libidevice_ffi.a for the device,
+# idevice-ios-sim.a for the simulator), so whatever archive the slice holds is
+# copied under the one name -lidevice_ffi expects, rather than assuming.
+copy_slice() {
+    local slice="$1" destination="$2" archive
+    archive="$(find "$FRAMEWORK/$slice" -maxdepth 1 -name '*.a' | head -1)"
+    if [ -z "$archive" ]; then
+        echo "No static library in $slice" >&2
+        exit 1
+    fi
+    cp "$archive" "$destination/libidevice_ffi.a"
+}
+
+copy_slice "ios-arm64" "$VENDOR/ios-arm64"
+copy_slice "ios-arm64_x86_64-simulator" "$VENDOR/ios-simulator"
 cp "$FRAMEWORK/ios-arm64/Headers/"*.h "$VENDOR/include/"
 
 echo "${VERSION}" > "$STAMP"
