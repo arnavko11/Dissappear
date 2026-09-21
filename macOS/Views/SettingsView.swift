@@ -139,11 +139,11 @@ struct SettingsView: View {
                             Text("\(remote.hostName):\(model.controlServerAddress?.split(separator: ":").last.map(String.init) ?? "8787")")
                                 .textSelection(.enabled)
                         }
-                        Text("\(remote.provider) is set up, so this address reaches the Mac from anywhere. Enter it in the iOS app's Address field when you are away.")
+                        Text("\(remote.provider) is set up, so this address reaches the Mac from anywhere. That covers the controls only: the Mac still has to reach the iPhone it is spoofing, over USB or the same local network. Controlling a Mac from afar is useful when the phone being spoofed stays here with it — not for the phone in your pocket.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("Away from home, the phone needs a shared network with this Mac. A mesh VPN such as Tailscale on both devices does that, and its address will appear here. Do not forward a router port to this server instead: it speaks plain HTTP and is meant for a private network.")
+                        Text("A mesh VPN such as Tailscale on both devices lets the controls reach this Mac from anywhere, and its address will appear here. It does not extend the spoofing itself: the Mac reaches the iPhone over USB or the local network, so the phone being spoofed has to be here. Do not forward a router port to this server instead: it speaks plain HTTP and is meant for a private network.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }

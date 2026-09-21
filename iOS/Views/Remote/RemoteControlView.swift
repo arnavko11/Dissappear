@@ -100,7 +100,8 @@ struct RemoteControlView: View {
             if let status = client.status, !status.sessionLost.isEmpty {
                 Section {
                     InlineMessage(text: status.sessionLost,
-                                  systemImage: "bolt.horizontal.circle", tint: .orange)
+                                  systemImage: status.detached ? "cable.connector.slash" : "bolt.horizontal.circle",
+                                  tint: .orange)
                     if client.lastSent != nil {
                         Button {
                             Task { await client.reapplyLastLocation() }
@@ -110,7 +111,7 @@ struct RemoteControlView: View {
                         .disabled(client.isBusy)
                     }
                 } header: {
-                    Text("Session Lost")
+                    Text(status.detached ? "iPhone Disconnected" : "Session Lost")
                 }
             }
 

@@ -111,17 +111,17 @@ struct SetupGuideView: View {
                 action: nil),
 
             SetupStep(
-                title: "Start the developer tunnel",
-                detail: model.isDeveloperTunnelRunning
-                    ? "Running, and it starts itself after a restart."
-                    : "iOS 17 and later reach the location service over a tunnel that needs administrator rights. macOS asks for your password once, then it runs itself from then on.",
-                isDone: model.isDeveloperTunnelRunning || model.locationTooling.usesAppleTooling,
-                instructions: nil,
-                action: model.locationTooling.tool == nil
-                    ? nil
-                    : model.isDeveloperTunnelRunning
-                        ? .init(title: "Stop Tunnel", run: { Task { await model.stopDeveloperTunnel() } })
-                        : .init(title: "Start Tunnel", run: { Task { await model.startDeveloperTunnel() } })),
+                title: "Reach the phone without a password",
+                detail: model.deviceLink.map { "Connected over \($0.label)." }
+                    ?? "The companion rides Apple's own tunnel where it can, so iOS 17 and later need no administrator password and Xcode keeps working alongside it. Turn on Wi-Fi sync in Finder to keep control of the phone with the cable unplugged.",
+                isDone: model.deviceLink != nil,
+                instructions: model.deviceLink != nil ? nil : """
+                Nothing to do here in advance — the connection is worked out the \
+                first time you spoof a location. For Wi-Fi: connect the phone by \
+                cable once, open it in Finder, and tick "Show this iPhone when on \
+                Wi-Fi".
+                """,
+                action: nil),
 
             SetupStep(
                 title: "Let the phone through the firewall",

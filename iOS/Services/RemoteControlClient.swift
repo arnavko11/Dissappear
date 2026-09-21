@@ -20,6 +20,9 @@ final class RemoteControlClient {
         var ready: Bool
         /// Non-empty when the companion's session ended on its own.
         var sessionLost: String
+        /// The phone left the Mac while a spoofed location was in force. It is
+        /// still in force, and nothing can change it until the cable is back.
+        var detached: Bool
     }
 
     /// Why the last attempt failed, kept apart so the UI can tell "the Mac is
@@ -82,12 +85,15 @@ final class RemoteControlClient {
     var isConnected: Bool { status != nil && trouble == nil }
 
     /// The companion is connected and has a device it can actually spoof.
-    var canSpoof: Bool { isConnected && (status?.ready ?? false) }
+    var canSpoof: Bool { isConnected && (status?.ready ?? false) && status?.detached != true }
 
     /// Why spoofing is unavailable, in one line, or nil when it is available.
     var unavailableReason: String? {
         if !isConfigured { return "Pick your Mac under Remote and enter its pairing code." }
         if !isConnected { return "Not connected to the companion on your Mac." }
+        if status?.detached == true {
+            return "This iPhone has left the Mac. It is still reporting the spoofed location, but changing it needs the Mac within reach again."
+        }
         if status?.ready != true { return "The companion has no iPhone it can spoof. Check the cable and Developer Mode." }
         return nil
     }
@@ -107,7 +113,8 @@ final class RemoteControlClient {
                             longitude: statusPayload["longitude"] as? Double ?? 0,
                             name: statusPayload["name"] as? String ?? "",
                             ready: statusPayload["ready"] as? Bool ?? false,
-                            sessionLost: statusPayload["sessionLost"] as? String ?? "")
+                            sessionLost: statusPayload["sessionLost"] as? String ?? "",
+                            detached: statusPayload["detached"] as? Bool ?? false)
 
             let placesPayload = try await send(method: "GET", path: "/locations", body: nil)
             places = (placesPayload["locations"] as? [[String: Any]] ?? []).compactMap { entry in
