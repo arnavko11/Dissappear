@@ -60,11 +60,10 @@ struct LocationSimulationService {
     """
 
     static let tunnelGuidance = """
-    iOS 17 and later reach the developer service over a tunnel that needs \
-    administrator rights. Use Start Developer Tunnel — macOS will ask for your \
-    password. By hand, run this once per restart and leave it running:
-
-    sudo pymobiledevice3 remote tunneld
+    The companion tries Apple's own tunnel first, which needs no password and \
+    leaves Xcode working, then an in-process tunnel. If both are refused, the \
+    device may need unlocking, or Developer Mode turning on under Settings ▸ \
+    Privacy & Security.
     """
 
     /// Port `pymobiledevice3 remote tunneld` binds by default.
@@ -81,6 +80,76 @@ struct LocationSimulationService {
         /// Set only while a process is holding the session open.
         var handle: UUID?
         var isHeld: Bool { handle != nil }
+    }
+
+    /// How the tool reaches the device.
+    ///
+    /// The cable is not the only way in, and the privileged tunnel is the
+    /// worst of the options rather than the only one:
+    ///
+    /// - `native` rides Apple's own `remoted` tunnel through `remotepairingd`.
+    ///   No root, no Xcode, and `remoted` keeps running, so it coexists with
+    ///   devicectl instead of fighting it for the device.
+    /// - `userspace` builds the iOS 17+ tunnel in-process in pure Python. No
+    ///   root either, just slower.
+    /// - `plain` is lockdown over usbmux, which is all iOS 16 and earlier need.
+    /// - `tunnel` is the privileged `tunneld` daemon: a last resort, because it
+    ///   wants an administrator password and takes the device away from Xcode.
+    ///
+    /// Each can discover the device over Bonjour instead of USB, which is what
+    /// lets the phone be unplugged and stay reachable.
+    struct Link: Equatable, Sendable {
+        enum Transport: Equatable, Sendable {
+            case native
+            case userspace
+            case plain
+            case tunnel
+        }
+
+        var transport: Transport
+        var isWireless: Bool
+
+        func arguments(udid: String) -> [String] {
+            var arguments: [String] = []
+            switch transport {
+            case .native: arguments.append("--native")
+            case .userspace: arguments.append("--userspace")
+            case .plain: break
+            case .tunnel: arguments += ["--tunnel", udid]
+            }
+            // --tunnel already names the device; passing both is rejected.
+            if transport != .tunnel { arguments += ["--udid", udid] }
+            if isWireless { arguments.append("--mobdev2") }
+            return arguments
+        }
+
+        var needsAdministrator: Bool { transport == .tunnel }
+
+        var label: String {
+            let how: String
+            switch transport {
+            case .native: how = "Apple's own tunnel"
+            case .userspace: how = "in-process tunnel"
+            case .plain: how = "lockdown"
+            case .tunnel: how = "tunneld"
+            }
+            return "\(how) over \(isWireless ? "Wi-Fi" : "USB")"
+        }
+
+        /// Cheapest and least invasive first, and a known-good link ahead of
+        /// everything so the search happens once rather than every time.
+        static func candidates(preferring known: Link?) -> [Link] {
+            var all: [Link] = []
+            for transport: Transport in [.native, .userspace, .plain] {
+                all.append(Link(transport: transport, isWireless: false))
+                all.append(Link(transport: transport, isWireless: true))
+            }
+            all.append(Link(transport: .tunnel, isWireless: false))
+
+            guard let known else { return all }
+            all.removeAll { $0 == known }
+            return [known] + all
+        }
     }
 
     private let runner = ProcessRunner.shared
@@ -125,258 +194,96 @@ struct LocationSimulationService {
     }
 
     /// Mounts the developer disk image if it is not mounted already.
-    func prepare(tool: Tool, onOutputLine: @escaping @Sendable (String) -> Void) async throws {
-        guard tool.version != "devicectl" else { return }   // devicectl mounts on demand
+    @discardableResult
+    func prepare(device: Device,
+                 tool: Tool,
+                 link: Link?,
+                 onOutputLine: @escaping @Sendable (String) -> Void) async throws -> Link? {
+        guard tool.version != "devicectl" else { return link }   // devicectl mounts on demand
 
-        let result = try await runner.run(tool.executablePath, ["mounter", "auto-mount"], onOutputLine: onOutputLine)
-        // Already-mounted is reported as a failure by some versions; that is fine.
-        guard result.succeeded || result.combinedOutput.localizedCaseInsensitiveContains("already") else {
-            throw Self.error(stage: "Mounting the developer disk image", result: result)
-        }
+        let outcome = try await attempt(["mounter", "auto-mount"],
+                                        device: device,
+                                        tool: tool,
+                                        link: link,
+                                        stage: "Mounting the developer disk image",
+                                        acceptable: { $0.localizedCaseInsensitiveContains("already") },
+                                        onOutputLine: onOutputLine)
+        return outcome
     }
 
-    /// Spoofs the device's location and returns the resulting session.
+    /// Spoofs the device's location.
     ///
-    /// Some tool versions hold the session open for as long as the spoof
-    /// should last; others latch it on the device and exit. Both are success,
-    /// and the returned session says which happened.
+    /// `set` latches the coordinate on the device and exits — the spoof lasts
+    /// until it is cleared, not until this process ends — so there is no
+    /// session to hold open and nothing to keep running.
     @discardableResult
     func beginSession(latitude: Double,
                       longitude: Double,
                       device: Device,
                       tool: Tool,
-                      onOutputLine: @escaping @Sendable (String) -> Void) async throws -> Session {
+                      link: Link?,
+                      onOutputLine: @escaping @Sendable (String) -> Void) async throws -> (Session, Link?) {
         let coordinates = [String(format: "%.6f", latitude), String(format: "%.6f", longitude)]
 
         if tool.version == "devicectl" {
-            try await runSimulateLocation(["set", "--"] + coordinates,
-                                          device: device,
-                                          tool: tool,
-                                          stage: "Spoofing the device location",
-                                          onOutputLine: onOutputLine)
-            return Session(handle: nil)
+            try await runDeviceCtlLocation(["set"] + coordinates,
+                                           device: device,
+                                           tool: tool,
+                                           stage: "Spoofing the device location",
+                                           onOutputLine: onOutputLine)
+            return (Session(handle: nil), link)
         }
 
-        let arguments = ["developer", "dvt", "simulate-location", "set", "--udid", device.udid, "--"] + coordinates
-        let handle = try await runner.start(tool.executablePath, arguments, onOutputLine: onOutputLine)
-
-        // Give it a moment to fail loudly, rather than reporting success for a
-        // session that died on launch.
-        try? await Task.sleep(for: .seconds(2))
-        if let status = await runner.exitStatus(handle) {
-            await runner.stop(handle)
-            guard status == 0 else {
-                // Retry through the tunnel, which is what iOS 17 and later need.
-                let tunnelled = try await runner.run(
-                    tool.executablePath,
-                    ["developer", "dvt", "simulate-location", "set", "--tunnel", device.udid, "--"] + coordinates,
-                    onOutputLine: onOutputLine)
-                if tunnelled.succeeded { return Session(handle: nil) }
-                throw Self.error(stage: "Spoofing the device location", result: tunnelled)
-            }
-            // Exited cleanly: the coordinate is latched on the device.
-            return Session(handle: nil)
-        }
-        return Session(handle: handle)
+        let resolved = try await attempt(["developer", "dvt", "simulate-location", "set", "--"] + coordinates,
+                                         device: device,
+                                         tool: tool,
+                                         link: link,
+                                         stage: "Spoofing the device location",
+                                         onOutputLine: onOutputLine)
+        return (Session(handle: nil), resolved)
     }
 
-    // MARK: - Developer tunnel
-
-    /// Whether `pymobiledevice3 remote tunneld` is already answering.
-    func isTunnelRunning() async -> Bool {
-        guard let url = URL(string: "http://127.0.0.1:\(Self.tunneldPort)/") else { return false }
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 1.5
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        return (try? await URLSession.shared.data(for: request)) != nil
-    }
-
-    /// Starts the tunnel daemon behind the standard macOS password panel.
+    /// Runs a command, trying each way of reaching the device until one works.
     ///
-    /// It is installed as a launchd daemon rather than backgrounded from the
-    /// password prompt. `do shell script` reaps the process group it spawned
-    /// as soon as it returns, so a `nohup … &` daemon died the instant the
-    /// panel closed and the port was never bound. launchd owns the process
-    /// instead, which also means it comes back after a restart — the tunnel is
-    /// set up once rather than every time the Mac boots.
-    func startTunnel(tool: Tool) async throws {
-        guard tool.version != "devicectl" else { return }
-        if await isTunnelRunning() { return }
+    /// The winning link is returned so the next call starts with it: the
+    /// search is for the first command against a device, not for every one.
+    @discardableResult
+    private func attempt(_ command: [String],
+                         device: Device,
+                         tool: Tool,
+                         link: Link?,
+                         stage: String,
+                         acceptable: (String) -> Bool = { _ in false },
+                         onOutputLine: @escaping @Sendable (String) -> Void) async throws -> Link? {
+        var failures: [(Link, ProcessResult)] = []
 
-        // Check the subcommand exists before asking anyone for a password.
-        let help = try await runner.run(tool.executablePath, ["remote", "tunneld", "--help"])
-        guard help.succeeded else {
-            throw CompanionError(
-                title: "This pymobiledevice3 Has No Tunnel",
-                details: "The installed version does not provide `remote tunneld`.",
-                recommendedAction: "Reinstall the tooling from Setup, which fetches a current version.",
-                technicalDetails: help.combinedOutput)
-        }
+        for candidate in Link.candidates(preferring: link) {
+            // Never ask for a password on a guess. The privileged tunnel is
+            // only used once it is already running.
+            if candidate.needsAdministrator, !(await isTunnelRunning()) { continue }
 
-        // A root daemon must not execute a binary that this user can rewrite:
-        // anything running as the user could then swap it and gain root. The
-        // app's own environment lives in the user's Application Support, so a
-        // root-owned copy is made and the daemon points at that.
-        let ownsTool = tool.executablePath == PyMobileDevice3Installer.executableURL.path
-        let source = PyMobileDevice3Installer.environmentURL.path
-        let arguments = ownsTool
-            ? [Self.systemToolDirectory + "/bin/python3", "-m", "pymobiledevice3", "remote", "tunneld"]
-            : [tool.executablePath, "remote", "tunneld"]
-
-        let staged = FileManager.default.temporaryDirectory
-            .appendingPathComponent("\(Self.daemonLabel).plist")
-        try Self.daemonPlist(arguments: arguments)
-            .write(to: staged, atomically: true, encoding: .utf8)
-
-        var steps = ["mkdir -p " + Self.shellQuoted(Self.logDirectory)]
-        if ownsTool {
-            steps += [
-                "rm -rf " + Self.shellQuoted(Self.systemToolDirectory),
-                "mkdir -p " + Self.shellQuoted((Self.systemToolDirectory as NSString).deletingLastPathComponent),
-                // Scripts inside a venv carry absolute shebangs, so the copy is
-                // run as `python3 -m pymobiledevice3` rather than through them.
-                "cp -R " + Self.shellQuoted(source) + " " + Self.shellQuoted(Self.systemToolDirectory),
-                "chown -R root:wheel " + Self.shellQuoted(Self.systemToolDirectory),
-                "chmod -R go-w " + Self.shellQuoted(Self.systemToolDirectory)
-            ]
-        }
-        steps += [
-            "cp " + Self.shellQuoted(staged.path) + " " + Self.shellQuoted(Self.daemonPlistPath),
-            "chown root:wheel " + Self.shellQuoted(Self.daemonPlistPath),
-            "chmod 644 " + Self.shellQuoted(Self.daemonPlistPath),
-            // Replace any earlier copy rather than failing as already loaded.
-            "launchctl bootout system/" + Self.daemonLabel + " 2>/dev/null || true",
-            "launchctl bootstrap system " + Self.shellQuoted(Self.daemonPlistPath)
-        ]
-        let script = "do shell script " + Self.appleScriptQuoted(steps.joined(separator: "; "))
-            + " with administrator privileges"
-
-        let result = try await runner.run("/usr/bin/osascript", ["-e", script])
-        guard result.succeeded else {
-            if result.combinedOutput.localizedCaseInsensitiveContains("cancel")
-                || result.combinedOutput.contains("-128") {
-                throw CompanionError(
-                    title: "Developer Tunnel Not Started",
-                    details: "The administrator prompt was cancelled.",
-                    recommendedAction: "The tunnel needs administrator rights because it opens a network interface on this Mac. Try again when you are ready.",
-                    technicalDetails: result.combinedOutput)
+            let result = try await runner.run(tool.executablePath,
+                                              command + candidate.arguments(udid: device.udid),
+                                              onOutputLine: onOutputLine)
+            if result.succeeded || acceptable(result.combinedOutput) {
+                return candidate
             }
-            throw Self.error(stage: "Installing the developer tunnel", result: result)
+            failures.append((candidate, result))
         }
 
-        // launchd starts it asynchronously, and the first run imports a large
-        // Python package tree, so this is slower than a bare process launch.
-        for _ in 0..<40 {
-            if await isTunnelRunning() { return }
-            try? await Task.sleep(for: .milliseconds(750))
+        guard let (_, last) = failures.last else {
+            throw CompanionError(
+                title: "\(stage) failed",
+                details: "No way of reaching the device was available.",
+                recommendedAction: "Connect the iPhone by cable, unlock it, and make sure Developer Mode is on.",
+                technicalDetails: command.joined(separator: " "))
         }
 
-        throw CompanionError(
-            title: "Developer Tunnel Did Not Answer",
-            details: "The daemon was installed but nothing is listening on port \(Self.tunneldPort).",
-            recommendedAction: "The daemon's own output is below — it usually names the cause. Stop Tunnel and try again once it is addressed.",
-            technicalDetails: await Self.tunnelDiagnostics())
-    }
-
-    /// Removes the daemon, so a tunnel the user did not want is not left
-    /// running as root forever.
-    func stopTunnel() async throws {
-        let steps = [
-            "launchctl bootout system/" + Self.daemonLabel + " 2>/dev/null || true",
-            "rm -f " + Self.shellQuoted(Self.daemonPlistPath),
-            "rm -rf " + Self.shellQuoted(Self.systemToolDirectory)
-        ]
-        let script = "do shell script " + Self.appleScriptQuoted(steps.joined(separator: "; "))
-            + " with administrator privileges"
-
-        let result = try await runner.run("/usr/bin/osascript", ["-e", script])
-        guard result.succeeded else {
-            throw Self.error(stage: "Stopping the developer tunnel", result: result)
-        }
-    }
-
-    /// Whatever the daemon reported, so a failure is explained here instead of
-    /// sending the user to find a log file by hand.
-    private static func tunnelDiagnostics() async -> String {
-        var parts: [String] = []
-
-        for path in [logPath, errorLogPath] {
-            guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
-            let tail = contents.split(separator: "\n").suffix(40).joined(separator: "\n")
-            if !tail.isEmpty { parts.append("\(path):\n\(tail)") }
-        }
-
-        if let state = try? await ProcessRunner.shared.run("/bin/launchctl", ["print", "system/\(daemonLabel)"]),
-           !state.combinedOutput.isEmpty {
-            let tail = state.combinedOutput.split(separator: "\n").prefix(25).joined(separator: "\n")
-            parts.append("launchctl print system/\(daemonLabel):\n\(tail)")
-        }
-
-        return parts.isEmpty
-            ? "The daemon produced no output at \(logPath)."
-            : parts.joined(separator: "\n\n")
-    }
-
-    // MARK: - launchd daemon
-
-    private static let daemonLabel = "com.dissappear.tunneld"
-    private static let daemonPlistPath = "/Library/LaunchDaemons/com.dissappear.tunneld.plist"
-    private static let logDirectory = "/Library/Logs/Dissappear"
-    /// Root-owned copy of the tool, so the daemon never runs user-writable code.
-    private static let systemToolDirectory = "/Library/Application Support/Dissappear/tunnel"
-    static let logPath = "/Library/Logs/Dissappear/tunneld.log"
-    static let errorLogPath = "/Library/Logs/Dissappear/tunneld.error.log"
-
-    private static func daemonPlist(arguments: [String]) -> String {
-        let argumentXML = arguments
-            .map { "        <string>\(xmlEscaped($0))</string>" }
-            .joined(separator: "\n")
-        return plist(argumentXML: argumentXML)
-    }
-
-    private static func plist(argumentXML: String) -> String {
-        """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>Label</key>
-            <string>\(daemonLabel)</string>
-            <key>ProgramArguments</key>
-            <array>
-        \(argumentXML)
-            </array>
-            <key>RunAtLoad</key>
-            <true/>
-            <key>KeepAlive</key>
-            <true/>
-            <key>StandardOutPath</key>
-            <string>\(logPath)</string>
-            <key>StandardErrorPath</key>
-            <string>\(errorLogPath)</string>
-            <key>ProcessType</key>
-            <string>Interactive</string>
-        </dict>
-        </plist>
-        """
-    }
-
-    private static func xmlEscaped(_ value: String) -> String {
-        value.replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-    }
-
-    private static func shellQuoted(_ value: String) -> String {
-        let escaped = value.replacingOccurrences(of: "'", with: "'\\''")
-        return "'" + escaped + "'"
-    }
-
-    private static func appleScriptQuoted(_ value: String) -> String {
-        let escaped = value
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        return "\"" + escaped + "\""
+        var error = Self.error(stage: stage, result: last)
+        error.technicalDetails = failures
+            .map { "— \($0.0.label)\n\($0.1.combinedOutput)" }
+            .joined(separator: "\n\n")
+        throw error
     }
 
     func endSession(_ handle: UUID) async {
@@ -387,52 +294,43 @@ struct LocationSimulationService {
         await runner.isRunning(handle)
     }
 
+    @discardableResult
     func clearLocation(device: Device,
                        tool: Tool,
-                       onOutputLine: @escaping @Sendable (String) -> Void) async throws {
-        try await runSimulateLocation(["clear"],
-                                      device: device,
-                                      tool: tool,
-                                      stage: "Clearing the device location",
-                                      onOutputLine: onOutputLine)
+                       link: Link?,
+                       onOutputLine: @escaping @Sendable (String) -> Void) async throws -> Link? {
+        if tool.version == "devicectl" {
+            try await runDeviceCtlLocation(["clear"], device: device, tool: tool,
+                                           stage: "Restoring the real location",
+                                           onOutputLine: onOutputLine)
+            return link
+        }
+        return try await attempt(["developer", "dvt", "simulate-location", "clear"],
+                                 device: device,
+                                 tool: tool,
+                                 link: link,
+                                 stage: "Restoring the real location",
+                                 onOutputLine: onOutputLine)
     }
 
+    @discardableResult
     func playRoute(gpxURL: URL,
                    device: Device,
                    tool: Tool,
-                   onOutputLine: @escaping @Sendable (String) -> Void) async throws {
-        try await runSimulateLocation(["play", gpxURL.path],
-                                      device: device,
-                                      tool: tool,
-                                      stage: "Playing the route on the device",
-                                      onOutputLine: onOutputLine)
-    }
-
-    /// Tries the direct call first, then the tunnel-aware form iOS 17+ needs.
-    private func runSimulateLocation(_ arguments: [String],
-                                     device: Device,
-                                     tool: Tool,
-                                     stage: String,
-                                     onOutputLine: @escaping @Sendable (String) -> Void) async throws {
+                   link: Link?,
+                   onOutputLine: @escaping @Sendable (String) -> Void) async throws -> Link? {
         if tool.version == "devicectl" {
-            try await runDeviceCtlLocation(arguments, device: device, tool: tool,
-                                           stage: stage, onOutputLine: onOutputLine)
-            return
+            try await runDeviceCtlLocation(["play", gpxURL.path], device: device, tool: tool,
+                                           stage: "Playing the route on the device",
+                                           onOutputLine: onOutputLine)
+            return link
         }
-
-        let base = ["developer", "dvt", "simulate-location"]
-
-        let direct = try await runner.run(tool.executablePath,
-                                          base + arguments + ["--udid", device.udid],
-                                          onOutputLine: onOutputLine)
-        if direct.succeeded { return }
-
-        let tunnelled = try await runner.run(tool.executablePath,
-                                             base + arguments + ["--tunnel", device.udid],
-                                             onOutputLine: onOutputLine)
-        if tunnelled.succeeded { return }
-
-        throw Self.error(stage: stage, result: tunnelled, fallback: direct)
+        return try await attempt(["developer", "dvt", "simulate-location", "play", gpxURL.path],
+                                 device: device,
+                                 tool: tool,
+                                 link: link,
+                                 stage: "Playing the route on the device",
+                                 onOutputLine: onOutputLine)
     }
 
     /// devicectl's location verbs, tried in the shapes Apple's CLI uses

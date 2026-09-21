@@ -34,6 +34,9 @@ final class CompanionModel: ObservableObject {
     /// The phone left while a spoofed location was in force on it. The spoof
     /// is still set; nothing here can reach it until the phone is back.
     @Published private(set) var isDeviceDetached = false
+    /// How the tool last reached the device, so the next command starts with
+    /// what already worked instead of searching again.
+    @Published private(set) var deviceLink: LocationSimulationService.Link?
     @Published private(set) var controlServerAddress: String?
     @Published private(set) var controlServerCode: String?
     @Published private(set) var controlServerStatus: ControlServerStatus = .off
@@ -772,16 +775,16 @@ extension CompanionModel {
 
     /// Mounts the developer disk image so the location service is reachable.
     func prepareDeviceForLocation() async {
-        guard !isBusy, let tool = locationTooling.tool else { return }
+        guard !isBusy, let tool = locationTooling.tool, let device = selectedDevice else { return }
         isBusy = true
         activity = "Preparing developer services"
         defer { isBusy = false; activity = nil }
 
         do {
-            try await locationSimulation.prepare(tool: tool) { [weak self] line in
+            deviceLink = try await locationSimulation.prepare(device: device, tool: tool, link: deviceLink) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }
-            appendLog("Developer disk image ready")
+            appendLog("Developer disk image ready via \(deviceLink?.label ?? "the device")")
         } catch let failure as CompanionError {
             error = failure
         } catch {
@@ -824,16 +827,19 @@ extension CompanionModel {
 
             // Mount the developer disk image first. It is idempotent, and
             // skipping it was the most common reason a first spoof failed.
-            try? await locationSimulation.prepare(tool: tool) { [weak self] line in
+            deviceLink = try? await locationSimulation.prepare(device: device, tool: tool, link: deviceLink) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }
 
-            locationSession = try await locationSimulation.beginSession(latitude: latitude,
-                                                                        longitude: longitude,
-                                                                        device: device,
-                                                                        tool: tool) { [weak self] line in
+            let outcome = try await locationSimulation.beginSession(latitude: latitude,
+                                                                    longitude: longitude,
+                                                                    device: device,
+                                                                    tool: tool,
+                                                                    link: deviceLink) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }
+            locationSession = outcome.0
+            deviceLink = outcome.1
             deviceLocation = SimulatedCoordinate(latitude: latitude, longitude: longitude)
             deviceLocationName = name
             sessionLostReason = nil
@@ -841,7 +847,7 @@ extension CompanionModel {
             monitorLocationSession()
             wakeAssertion.acquire(reason: WakeAssertion.Reason.locationSession)
             isKeepingAwake = wakeAssertion.isActive
-            appendLog("Device location spoofed to \(String(format: "%.5f, %.5f", latitude, longitude))")
+            appendLog("Device location spoofed to \(String(format: "%.5f, %.5f", latitude, longitude)) via \(deviceLink?.label ?? "the device")")
             if locationSession?.isHeld == true {
                 appendLog("Holding the session open and keeping this Mac awake.")
             } else {
@@ -953,7 +959,7 @@ extension CompanionModel {
                 await locationSimulation.endSession(handle)
             }
             locationSession = nil
-            try await locationSimulation.clearLocation(device: device, tool: tool) { [weak self] line in
+            deviceLink = try await locationSimulation.clearLocation(device: device, tool: tool, link: deviceLink) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }
             deviceLocation = nil
@@ -986,7 +992,7 @@ extension CompanionModel {
         do {
             let points = Self.densify(route: route)
             let gpx = try GPXWriter.write(coordinates: points, name: route.name)
-            try await locationSimulation.playRoute(gpxURL: gpx, device: device, tool: tool) { [weak self] line in
+            deviceLink = try await locationSimulation.playRoute(gpxURL: gpx, device: device, tool: tool, link: deviceLink) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }
             deviceLocationName = route.name
@@ -1150,6 +1156,8 @@ extension CompanionModel {
                 "ready": canSimulateDeviceLocation,
                 "tunnel": isDeveloperTunnelRunning,
                 "detached": isDeviceDetached,
+                "link": deviceLink?.label ?? "",
+                "wireless": deviceLink?.isWireless ?? false,
                 "busy": isBusy,
                 "sessionLost": sessionLostReason ?? ""
             ])

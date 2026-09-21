@@ -95,9 +95,9 @@ struct DeviceDetailView: View {
                                   value: deviceLocationValue,
                                   state: model.deviceLocation == nil ? .inactive
                                        : (model.isDeviceDetached ? .warning : .good))
-                        StatusRow(label: "Developer Tunnel",
-                                  value: model.isDeveloperTunnelRunning ? "Running" : "Not running",
-                                  state: model.isDeveloperTunnelRunning ? .good : tunnelState)
+                        StatusRow(label: "Connection",
+                                  value: model.deviceLink?.label ?? "Not established yet",
+                                  state: model.deviceLink == nil ? .inactive : .good)
 
                         if model.locationTooling.tool == nil {
                             HStack(spacing: 10) {
@@ -122,18 +122,11 @@ struct DeviceDetailView: View {
                                 }
                                 .disabled(model.isBusy)
 
-                                if needsTunnel {
-                                    if model.isDeveloperTunnelRunning {
-                                        Button("Stop Tunnel") {
-                                            Task { await model.stopDeveloperTunnel() }
-                                        }
-                                        .disabled(model.isBusy)
-                                    } else {
-                                        Button("Start Developer Tunnel") {
-                                            Task { await model.startDeveloperTunnel() }
-                                        }
-                                        .disabled(model.isBusy)
+                                if model.isDeveloperTunnelRunning {
+                                    Button("Stop Tunnel") {
+                                        Task { await model.stopDeveloperTunnel() }
                                     }
+                                    .disabled(model.isBusy)
                                 }
 
                                 if model.deviceLocation != nil {
@@ -148,7 +141,7 @@ struct DeviceDetailView: View {
                     } header: {
                         Text("Location Spoofing")
                     } footer: {
-                        Text("Replaces the location this iPhone reports to every app on it — Maps, Find My, anything. It runs through Apple's own developer location service, so Developer Mode has to be on and the device has to trust this Mac. Pick where to appear in Locations, or a path to walk in Routes. Stop Spoofing puts real GPS back. Unplugging the phone does not: the coordinate stays in force on it until it is cleared or the phone restarts, so stop spoofing before you disconnect.")
+                        Text("Replaces the location this iPhone reports to every app on it — Maps, Find My, anything. It runs through Apple's own developer location service, so Developer Mode has to be on and the device has to trust this Mac. Pick where to appear in Locations, or a path to walk in Routes. Stop Spoofing puts real GPS back. Unplugging does not: the coordinate stays in force until it is cleared or the phone restarts. To keep control of it without the cable, turn on Wi-Fi sync for this phone in Finder — the companion will then reach it over the network.")
                     }
 
                 }
@@ -211,18 +204,6 @@ struct DeviceDetailView: View {
                 .disabled(!model.isAppInstalled)
         }
         .disabled(model.isBusy)
-    }
-
-    /// The tunnel only matters for iOS 17 and later going through
-    /// pymobiledevice3; devicectl and older systems do not need it.
-    private var needsTunnel: Bool {
-        guard !model.locationTooling.usesAppleTooling else { return false }
-        let major = Int(device.osVersion.split(separator: ".").first.map(String.init) ?? "") ?? 0
-        return major >= 17
-    }
-
-    private var tunnelState: StatusDot.State {
-        needsTunnel ? .warning : .inactive
     }
 
     private var deviceLocationValue: String {
