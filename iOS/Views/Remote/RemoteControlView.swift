@@ -71,8 +71,10 @@ struct RemoteControlView: View {
                             if normalised != value { client.pairingCode = normalised }
                         }
                 }
-                Button("Connect") { Task { await client.refresh() } }
-                    .disabled(!client.isConfigured || client.isBusy)
+                Button(client.isBusy ? "Connecting…" : "Connect") {
+                    Task { await client.refresh() }
+                }
+                .disabled(!client.isConfigured || client.isBusy)
             } header: {
                 Text("Companion")
             } footer: {
@@ -173,7 +175,9 @@ struct RemoteControlView: View {
             // Keep the picture current: a session can die while the phone is
             // in a pocket, and silence would read as everything being fine.
             while !Task.isCancelled {
-                if client.isConfigured { await client.refresh() }
+                // Skip while a request is already out, so a slow round trip
+                // does not queue more behind it.
+                if client.isConfigured, !client.isBusy { await client.refresh() }
                 try? await Task.sleep(for: .seconds(5))
             }
         }

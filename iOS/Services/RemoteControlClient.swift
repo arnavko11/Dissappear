@@ -165,20 +165,43 @@ final class RemoteControlClient {
 
     private func send(method: String, path: String, body: Data?) async throws -> [String: Any] {
         let trimmedHost = host.trimmingCharacters(in: .whitespaces)
+        let payload = requestData(method: method, path: path, body: body, host: trimmedHost)
 
-        let endpoint: NWEndpoint
-        if let discovered {
-            endpoint = discovered.endpoint
-        } else {
-            guard let portNumber = UInt16(port.trimmingCharacters(in: .whitespaces)),
-                  let endpointPort = NWEndpoint.Port(rawValue: portNumber) else {
-                throw RemoteError(message: "That port is not valid.")
-            }
-            endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(trimmedHost), port: endpointPort)
+        // A discovered companion is tried first, then the typed address. A
+        // Bonjour record can resolve to an interface that cannot actually be
+        // reached — a stale advertisement, or an interface the phone has no
+        // route to — and the address is right there, so there is no reason to
+        // fail without trying it.
+        var attempts: [NWEndpoint] = []
+        if let discovered { attempts.append(discovered.endpoint) }
+        if let direct = directEndpoint(host: trimmedHost) { attempts.append(direct) }
+
+        guard !attempts.isEmpty else {
+            throw RemoteError(message: "Pick a companion, or type its address and port.",
+                              isReachability: true)
         }
 
+        var lastFailure: Error?
+        for endpoint in attempts {
+            do {
+                return try await parse(await exchange(endpoint: endpoint, payload: payload))
+            } catch let failure as RemoteError where failure.isReachability {
+                lastFailure = failure          // unreachable: worth trying the next
+            }
+        }
+        throw lastFailure ?? RemoteError(message: "Could not reach the companion.", isReachability: true)
+    }
+
+    private func directEndpoint(host trimmedHost: String) -> NWEndpoint? {
+        guard !trimmedHost.isEmpty,
+              let number = UInt16(port.trimmingCharacters(in: .whitespaces)),
+              let endpointPort = NWEndpoint.Port(rawValue: number) else { return nil }
+        return .hostPort(host: NWEndpoint.Host(trimmedHost), port: endpointPort)
+    }
+
+    private func requestData(method: String, path: String, body: Data?, host trimmedHost: String) -> Data {
         var request = "\(method) \(path) HTTP/1.1\r\n"
-        request += "Host: \(discovered?.name ?? trimmedHost)\r\n"
+        request += "Host: \(trimmedHost.isEmpty ? "companion" : trimmedHost)\r\n"
         request += "X-Pair-Code: \(pairingCode)\r\n"
         request += "Connection: close\r\n"
         if let body {
@@ -189,8 +212,10 @@ final class RemoteControlClient {
 
         var payload = Data(request.utf8)
         if let body { payload.append(body) }
+        return payload
+    }
 
-        let response = try await exchange(endpoint: endpoint, payload: payload)
+    private func parse(_ response: Data) throws -> [String: Any] {
         guard let separator = response.range(of: Data("\r\n\r\n".utf8)) else {
             throw RemoteError(message: "The companion sent an unreadable reply.")
         }
@@ -200,52 +225,92 @@ final class RemoteControlClient {
         let json = (try? JSONSerialization.jsonObject(with: Data(bodyData)) as? [String: Any]) ?? [:]
 
         guard head.contains(" 200 ") else {
+            // A refusal means the companion answered, so it is not a
+            // reachability problem and the next endpoint would refuse too.
             throw RemoteError(message: json["error"] as? String ?? "The companion refused the request.")
         }
         return json
     }
 
+    /// How long a single request may take before it is abandoned. Local
+    /// network round trips are milliseconds; anything near this is a Mac that
+    /// is not answering.
+    private static let requestTimeout: Duration = .seconds(8)
+
     private func exchange(endpoint: NWEndpoint, payload: Data) async throws -> Data {
         let connection = NWConnection(to: endpoint, using: .tcp)
+        let finished = Finished()
 
         return try await withCheckedThrowingContinuation { continuation in
-            let finished = Finished()
+            // Nothing below may hang forever. A connection that is refused or
+            // filtered — a firewall on the Mac, the companion switched off,
+            // the phone on a different network — settles in `.waiting` and
+            // retries there silently for as long as it is allowed to. That is
+            // not `.failed`, so the old code never resumed: the request stayed
+            // in flight, the spinner never stopped, and Connect stayed
+            // disabled with no way back.
+            let timeout = Task.detached {
+                try? await Task.sleep(for: Self.requestTimeout)
+                guard finished.claim() else { return }
+                connection.cancel()
+                continuation.resume(throwing: RemoteError(
+                    message: "The companion did not answer within 8 seconds. Check that it is running, that Remote Control is on, and that macOS is not blocking incoming connections in System Settings ▸ Network ▸ Firewall.",
+                    isReachability: true))
+            }
+
+            let fail: @Sendable (String) -> Void = { message in
+                guard finished.claim() else { return }
+                timeout.cancel()
+                connection.cancel()
+                continuation.resume(throwing: RemoteError(message: message, isReachability: true))
+            }
 
             connection.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
                     connection.send(content: payload, completion: .contentProcessed { error in
                         if let error {
-                            if finished.claim() {
-                                connection.cancel()
-                                continuation.resume(throwing: RemoteError(message: error.localizedDescription))
-                            }
+                            guard finished.claim() else { return }
+                            timeout.cancel()
+                            connection.cancel()
+                            continuation.resume(throwing: RemoteError(message: error.localizedDescription))
                             return
                         }
                         Self.receiveAll(connection, buffer: Data()) { result in
                             guard finished.claim() else { return }
+                            timeout.cancel()
                             connection.cancel()
                             continuation.resume(with: result)
                         }
                     })
+
+                case let .waiting(error):
+                    // A refusal is final, whatever Network.framework intends to
+                    // do about it; anything vaguer is left to the timeout in
+                    // case the interface is still coming up.
+                    if Self.isFinal(error) {
+                        fail("Could not reach the companion. \(error.localizedDescription)")
+                    }
+
                 case let .failed(error):
-                    if finished.claim() {
-                        connection.cancel()
-                        continuation.resume(throwing: RemoteError(
-                            message: "Could not reach the companion. \(error.localizedDescription)",
-                            isReachability: true))
-                    }
+                    fail("Could not reach the companion. \(error.localizedDescription)")
+
                 case .cancelled:
-                    if finished.claim() {
-                        continuation.resume(throwing: RemoteError(message: "The connection closed.",
-                                                                  isReachability: true))
-                    }
+                    fail("The connection closed.")
+
                 default:
                     break
                 }
             }
             connection.start(queue: .global(qos: .userInitiated))
         }
+    }
+
+    /// Errors that will not resolve themselves by waiting.
+    private nonisolated static func isFinal(_ error: NWError) -> Bool {
+        guard case let .posix(code) = error else { return false }
+        return code == .ECONNREFUSED || code == .EHOSTUNREACH
+            || code == .ENETUNREACH || code == .ETIMEDOUT
     }
 
     /// Reads until the peer closes, which the companion does after replying.
