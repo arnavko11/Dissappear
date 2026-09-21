@@ -14,8 +14,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENDOR="$ROOT/Vendor/idevice"
 STAMP="$VENDOR/.version"
 
-if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$VERSION" ]; then
-    echo "idevice $VERSION already present in Vendor/idevice"
+if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "${VERSION}" ]; then
+    echo "idevice ${VERSION} already present in Vendor/idevice"
     exit 0
 fi
 
@@ -23,10 +23,10 @@ URL="https://github.com/jkcoxson/idevice/releases/download/${VERSION}/idevice-xc
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-echo "Downloading idevice $VERSION…"
+echo "Downloading idevice ${VERSION}..."
 curl -fsSL -o "$WORK/bundle.zip" "$URL"
 
-echo "Extracting…"
+echo "Extracting..."
 unzip -q "$WORK/bundle.zip" -d "$WORK/x"
 
 FRAMEWORK="$WORK/x/swift/IDevice.xcframework"
@@ -41,5 +41,5 @@ cp "$FRAMEWORK/ios-arm64/libidevice_ffi.a" "$VENDOR/ios-arm64/"
 cp "$FRAMEWORK/ios-arm64_x86_64-simulator/libidevice_ffi.a" "$VENDOR/ios-simulator/"
 cp "$FRAMEWORK/ios-arm64/Headers/"*.h "$VENDOR/include/"
 
-echo "$VERSION" > "$STAMP"
-echo "idevice $VERSION ready in Vendor/idevice"
+echo "${VERSION}" > "$STAMP"
+echo "idevice ${VERSION} ready in Vendor/idevice"
