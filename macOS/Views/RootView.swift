@@ -1,6 +1,7 @@
 import SwiftUI
 
 enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
+    case setup = "Setup"
     case devices = "Devices"
     case locations = "Locations"
     case routes = "Routes"
@@ -12,6 +13,7 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
 
     var symbol: String {
         switch self {
+        case .setup: return "checklist"
         case .devices: return "iphone.gen3"
         case .locations: return "mappin.and.ellipse"
         case .routes: return "point.topleft.down.to.point.bottomright.curvepath"
@@ -24,13 +26,18 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
 
 struct RootView: View {
     @EnvironmentObject private var model: CompanionModel
-    @State private var selection: SidebarSection? = .devices
+    @State private var selection: SidebarSection?
+
+    /// Setup until it is no longer needed.
+    private var defaultSection: SidebarSection {
+        model.isReadyToSpoof ? .devices : .setup
+    }
 
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
-                Section("Workspace") {
-                    ForEach([SidebarSection.devices, .locations, .routes, .scenarios]) { section in
+                Section("Spoofing") {
+                    ForEach([SidebarSection.setup, .devices, .locations, .routes, .scenarios]) { section in
                         Label(section.rawValue, systemImage: section.symbol).tag(section)
                     }
                 }
@@ -43,7 +50,8 @@ struct RootView: View {
             .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 260)
             .safeAreaInset(edge: .bottom) { DeviceStatusFooter() }
         } detail: {
-            switch selection ?? .devices {
+            switch selection ?? defaultSection {
+            case .setup: SetupGuideView()
             case .devices: DevicesView()
             case .locations: LocationsView()
             case .routes: RoutesView()
@@ -51,6 +59,10 @@ struct RootView: View {
             case .build: BuildView()
             case .settings: SettingsView()
             }
+        }
+        .task {
+            // New users land on Setup; once spoofing works, on the device.
+            if selection == nil { selection = defaultSection }
         }
         .alert(item: $model.error) { error in
             Alert(title: Text(error.title),

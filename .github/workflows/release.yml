@@ -20,7 +20,7 @@ permissions:
 jobs:
   release:
     name: Build and release
-    runs-on: macos-15
+    runs-on: macos-26
     env:
       VERSION: 1.0.${{ github.run_number }}
     steps:
@@ -95,7 +95,17 @@ jobs:
           # so an unsigned build cannot launch on the machines this targets.
           # An ad-hoc signature satisfies that; it is not a developer identity
           # and does not make the app notarised.
-          codesign --force --deep --sign - --timestamp=none "$app"
+          #
+          # Signed inside-out rather than with --deep: --deep is deprecated and
+          # mis-signs nested code, which Gatekeeper then reports as a damaged
+          # app (error -47) instead of an unsigned one.
+          find "$app/Contents" \
+            \( -name "*.dylib" -o -name "*.framework" -o -name "*.appex" -o -name "*.app" \) \
+            -depth -print0 2>/dev/null |
+            while IFS= read -r -d '' nested; do
+              codesign --force --sign - --timestamp=none "$nested"
+            done
+          codesign --force --sign - --timestamp=none "$app"
           codesign --verify --strict --verbose=2 "$app"
           echo "::group::Signature"
           codesign -dv --verbose=2 "$app" 2>&1 || true
@@ -105,6 +115,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
+
+          # Shipped as an installer package, not just a zip. An app unzipped
+          # from a download carries the quarantine flag, and macOS refuses to
+          # open a quarantined app that is only ad-hoc signed — the "damaged,
+          # move to Trash" dialog, error -47 — with no way past it in the UI.
+          # A package installs the app without that flag, so it launches by
+          # double-click with no Terminal command first.
+          mkdir -p pkgroot/Applications
+          cp -R "build-macos/Build/Products/Release/DissappearCompanion.app" pkgroot/Applications/
+          pkgbuild \
+            --root pkgroot \
+            --identifier com.dissappear.companion.pkg \
+            --version "${VERSION}" \
+            --install-location / \
+            "artifacts/DissappearCompanion-${VERSION}-macOS.pkg"
 
           ditto -c -k --sequesterRsrc --keepParent \
             "build-macos/Build/Products/Release/DissappearCompanion.app" \
@@ -135,7 +160,8 @@ jobs:
           {
             printf 'Automated build of the Dissappear macOS companion and iOS test app.\n\n'
             printf '| Asset | Contents |\n| --- | --- |\n'
-            printf '| `DissappearCompanion-*-macOS.zip` | macOS companion, ad-hoc signed so it runs on Apple silicon, but not notarised. After unzipping run: xattr -dr com.apple.quarantine DissappearCompanion.app |\n'
+            printf '| `DissappearCompanion-*-macOS.pkg` | **Start here.** macOS companion installer. Double-click it, then open Dissappear Companion from Applications. The installer is unsigned, so on first run macOS asks you to allow it in System Settings ▸ Privacy & Security; no Terminal command is needed. |\n'
+            printf '| `DissappearCompanion-*-macOS.zip` | The same app as a plain zip, for anyone who prefers it. Unzipping a download quarantines the app, so this copy needs: xattr -dr com.apple.quarantine DissappearCompanion.app |\n'
             printf '| `Dissappear-*-iOS-Simulator.zip` | iOS app built for the Simulator. Drag it onto a booted simulator to run. |\n'
             printf '| `Dissappear-*-iOS-unsigned.ipa` | iOS device build, unsigned. Install it by signing with your own Apple Development identity; the macOS companion builds, signs and installs it through Xcode tooling. |\n\n'
             printf 'Neither asset is distribution-signed. Device installs go through Apple standard development signing and provisioning.\n'

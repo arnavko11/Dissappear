@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Security
 import SwiftUI
@@ -22,13 +23,17 @@ final class CompanionModel: ObservableObject {
     /// The coordinate currently pushed to the device, if this app set it.
     @Published private(set) var deviceLocation: SimulatedCoordinate?
     @Published private(set) var deviceLocationName: String?
-    /// Held open for as long as the simulation should last.
-    fileprivate var locationSessionHandle: UUID?
+    /// The live spoofing session, held open or latched on the device.
+    fileprivate var locationSession: LocationSimulationService.Session?
     fileprivate var locationSessionMonitor: Task<Void, Never>?
+    /// Whether the iOS 17+ developer tunnel is up, and what the installer is doing.
+    @Published private(set) var isDeveloperTunnelRunning = false
+    @Published private(set) var toolingInstallActivity: String?
     /// Set when a live session stopped on its own, so the phone can say why.
     @Published private(set) var sessionLostReason: String?
     @Published private(set) var controlServerAddress: String?
     @Published private(set) var controlServerCode: String?
+    @Published private(set) var controlServerStatus: ControlServerStatus = .off
     @Published private(set) var isKeepingAwake = false
     /// Address that works from outside the home network, when a mesh VPN is set up.
     @Published private(set) var remoteAddress: MeshNetworkService.Address?
@@ -60,6 +65,7 @@ final class CompanionModel: ObservableObject {
     fileprivate let appleIDAuth = AppleIDAuthService()
     fileprivate let freeProvisioning = FreeProvisioningService()
     fileprivate let locationSimulation = LocationSimulationService()
+    fileprivate let toolInstaller = PyMobileDevice3Installer()
     fileprivate let controlServer = ControlServer()
     fileprivate let wakeAssertion = WakeAssertion()
     fileprivate let meshNetwork = MeshNetworkService()
@@ -117,9 +123,21 @@ final class CompanionModel: ObservableObject {
         tools = await toolingService.availableTools()
         bundledBuildSize = bundledBuildService.version
         locationTooling = await locationSimulation.availability()
+        isDeveloperTunnelRunning = await locationSimulation.isTunnelRunning()
         await refreshDevices()
         await refreshSigning()
         await refreshInstallationState()
+        if Preferences.remoteControlEnabled, !isControlServerRunning {
+            startControlServer()
+        }
+
+        // Spoofing needs pymobiledevice3 and nothing about installing it needs
+        // a decision from the user, so it is fetched once, in the background,
+        // rather than left as a chore in a setup screen.
+        if locationTooling.tool == nil, !Preferences.didAttemptToolingInstall {
+            Preferences.didAttemptToolingInstall = true
+            await installLocationTooling(announcingFailures: false)
+        }
     }
 
     func refreshDevices() async {
@@ -645,6 +663,90 @@ extension CompanionModel {
         locationTooling.tool != nil && selectedDevice != nil
     }
 
+    /// Everything the developer location service needs is in place.
+    var isReadyToSpoof: Bool {
+        toolchain.hasDeviceCtl
+            && locationTooling.tool != nil
+            && selectedDevice?.developerMode == .enabled
+    }
+
+    /// Opens Xcode's App Store page, so "install Xcode" is one click rather
+    /// than a search.
+    func openXcodeInAppStore() {
+        guard let url = URL(string: "macappstore://apps.apple.com/app/xcode/id497799835") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Finds a working anisette server and stores it, so Apple ID sign-in can
+    /// be tried without the user researching what anisette even is.
+    func findAnisetteServer() async {
+        activity = "Looking for an anisette server"
+        defer { if !isBusy { activity = nil } }
+
+        guard let server = await AnisetteDiscovery().firstReachable() else {
+            error = CompanionError(
+                title: "No Anisette Server Answered",
+                details: "None of the published servers could be reached.",
+                recommendedAction: "You do not need one to spoof a location. It is only for Build ▸ Apple ID Signing; installing with a provisioning profile from Xcode needs none of this.",
+                technicalDetails: "https://servers.sidestore.io/servers.json")
+            return
+        }
+        Preferences.anisetteServerString = server.address
+        appendLog("Using anisette server \(server.name) — \(server.address)")
+    }
+
+    /// Installs pymobiledevice3 into a private environment this app owns, so
+    /// spoofing works without anyone opening Terminal.
+    func installLocationTooling(announcingFailures: Bool = true) async {
+        guard toolingInstallActivity == nil else { return }
+        toolingInstallActivity = "Preparing…"
+        defer { toolingInstallActivity = nil }
+
+        do {
+            try await toolInstaller.install { [weak self] progress in
+                switch progress {
+                case .locatingPython: self?.toolingInstallActivity = "Looking for Python 3…"
+                case .creatingEnvironment: self?.toolingInstallActivity = "Creating a private environment…"
+                case .downloading: self?.toolingInstallActivity = "Downloading pymobiledevice3…"
+                case let .finished(version): self?.appendLog("Installed \(version)")
+                }
+            } onOutputLine: { [weak self] line in
+                Task { @MainActor in self?.appendLog(line) }
+            }
+            locationTooling = await locationSimulation.availability()
+        } catch let failure as CompanionError {
+            appendLog("✗ \(failure.title): \(failure.details)")
+            if announcingFailures { error = failure }
+        } catch {
+            appendLog("✗ Installing pymobiledevice3 failed: \(error.localizedDescription)")
+            if announcingFailures { self.error = .generic("Installing pymobiledevice3 failed", error) }
+        }
+    }
+
+    /// Brings up the iOS 17+ developer tunnel behind the standard macOS
+    /// administrator prompt, instead of sending the user to Terminal.
+    func startDeveloperTunnel() async {
+        guard let tool = locationTooling.tool else {
+            error = CompanionError(title: "pymobiledevice3 Not Installed",
+                                   details: "The developer tunnel is part of pymobiledevice3.",
+                                   recommendedAction: LocationSimulationService.installGuidance,
+                                   technicalDetails: "locationTooling = notInstalled")
+            return
+        }
+        activity = "Starting the developer tunnel"
+        defer { if !isBusy { activity = nil } }
+
+        do {
+            try await locationSimulation.startTunnel(tool: tool)
+            isDeveloperTunnelRunning = await locationSimulation.isTunnelRunning()
+            appendLog(isDeveloperTunnelRunning ? "Developer tunnel is up" : "Developer tunnel did not come up")
+        } catch let failure as CompanionError {
+            error = failure
+        } catch {
+            self.error = .generic("Starting the developer tunnel failed", error)
+        }
+    }
+
     /// Mounts the developer disk image so the location service is reachable.
     func prepareDeviceForLocation() async {
         guard !isBusy, let tool = locationTooling.tool else { return }
@@ -664,29 +766,49 @@ extension CompanionModel {
         }
     }
 
-    /// Sets the location the whole device reports, using Apple's developer
+    /// Spoofs the location the whole device reports, using Apple's developer
     /// location service. Every app on the phone sees it until it is cleared.
     func setDeviceLocation(latitude: Double, longitude: Double, name: String?) async {
-        guard !isBusy, let device = selectedDevice else { return }
+        guard let device = selectedDevice else {
+            error = CompanionError(title: "No iPhone Selected",
+                                   details: "Nothing is connected to spoof the location of.",
+                                   recommendedAction: "Connect an iPhone by cable, unlock it, and trust this Mac.",
+                                   technicalDetails: "devices = \(devices.count)")
+            return
+        }
+        guard !isBusy else {
+            error = CompanionError(title: "Busy",
+                                   details: "Another operation is still running: \(activity ?? "please wait").",
+                                   recommendedAction: "Wait for it to finish, then set the location again.",
+                                   technicalDetails: "isBusy = true")
+            return
+        }
         guard let tool = locationTooling.tool else {
             error = CompanionError(title: "pymobiledevice3 Not Installed",
-                                   details: "Setting the device's location needs a client for Apple's developer services.",
+                                   details: "Spoofing the device's location needs a client for Apple's developer services.",
                                    recommendedAction: LocationSimulationService.installGuidance,
                                    technicalDetails: "No pymobiledevice3 executable found in the usual locations")
             return
         }
         isBusy = true
-        activity = "Setting location on \(device.name)"
+        activity = "Spoofing location on \(device.name)"
         defer { isBusy = false; activity = nil }
 
         do {
-            if let existing = locationSessionHandle {
+            if let existing = locationSession?.handle {
                 await locationSimulation.endSession(existing)
             }
-            locationSessionHandle = try await locationSimulation.beginSession(latitude: latitude,
-                                                                              longitude: longitude,
-                                                                              device: device,
-                                                                              tool: tool) { [weak self] line in
+
+            // Mount the developer disk image first. It is idempotent, and
+            // skipping it was the most common reason a first spoof failed.
+            try? await locationSimulation.prepare(tool: tool) { [weak self] line in
+                Task { @MainActor in self?.appendLog(line) }
+            }
+
+            locationSession = try await locationSimulation.beginSession(latitude: latitude,
+                                                                        longitude: longitude,
+                                                                        device: device,
+                                                                        tool: tool) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }
             deviceLocation = SimulatedCoordinate(latitude: latitude, longitude: longitude)
@@ -695,12 +817,16 @@ extension CompanionModel {
             monitorLocationSession()
             wakeAssertion.acquire(reason: WakeAssertion.Reason.locationSession)
             isKeepingAwake = wakeAssertion.isActive
-            appendLog("Device location set to \(String(format: "%.5f, %.5f", latitude, longitude))")
-            appendLog("Holding the session open and keeping this Mac awake.")
+            appendLog("Device location spoofed to \(String(format: "%.5f, %.5f", latitude, longitude))")
+            if locationSession?.isHeld == true {
+                appendLog("Holding the session open and keeping this Mac awake.")
+            } else {
+                appendLog("The coordinate is latched on the device and lasts until it is cleared.")
+            }
         } catch let failure as CompanionError {
             error = failure
         } catch {
-            self.error = .generic("Setting the device location failed", error)
+            self.error = .generic("Spoofing the device location failed", error)
         }
     }
 
@@ -709,16 +835,18 @@ extension CompanionModel {
     /// leaving the UI claiming a location that is no longer set.
     private func monitorLocationSession() {
         locationSessionMonitor?.cancel()
-        guard let handle = locationSessionHandle else { return }
+        // A latched spoof outlives every process, so there is nothing to watch
+        // and nothing that can be "lost".
+        guard let handle = locationSession?.handle else { return }
 
         locationSessionMonitor = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(3))
                 guard let self, !Task.isCancelled else { return }
-                guard self.locationSessionHandle == handle else { return }
+                guard self.locationSession?.handle == handle else { return }
                 if await self.locationSimulation.isSessionActive(handle) { continue }
 
-                self.locationSessionHandle = nil
+                self.locationSession = nil
                 self.deviceLocation = nil
                 self.sessionLostReason = """
                 The simulation stopped. The device may have been unplugged, or the \
@@ -733,7 +861,20 @@ extension CompanionModel {
     }
 
     func clearDeviceLocation() async {
-        guard !isBusy, let device = selectedDevice, let tool = locationTooling.tool else { return }
+        guard let device = selectedDevice, let tool = locationTooling.tool else {
+            error = CompanionError(title: "Nothing to Restore",
+                                   details: "No iPhone is selected, or pymobiledevice3 is not installed.",
+                                   recommendedAction: "Connect an iPhone and install the location tooling from the Devices screen.",
+                                   technicalDetails: "device = \(selectedDevice?.name ?? "nil")")
+            return
+        }
+        guard !isBusy else {
+            error = CompanionError(title: "Busy",
+                                   details: "Another operation is still running: \(activity ?? "please wait").",
+                                   recommendedAction: "Wait for it to finish, then try again.",
+                                   technicalDetails: "isBusy = true")
+            return
+        }
         isBusy = true
         activity = "Restoring real location on \(device.name)"
         defer { isBusy = false; activity = nil }
@@ -742,10 +883,10 @@ extension CompanionModel {
             locationSessionMonitor?.cancel()
             locationSessionMonitor = nil
             sessionLostReason = nil
-            if let handle = locationSessionHandle {
+            if let handle = locationSession?.handle {
                 await locationSimulation.endSession(handle)
-                locationSessionHandle = nil
             }
+            locationSession = nil
             try await locationSimulation.clearLocation(device: device, tool: tool) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }
@@ -753,7 +894,7 @@ extension CompanionModel {
             deviceLocationName = nil
             wakeAssertion.release(reason: WakeAssertion.Reason.locationSession)
             isKeepingAwake = wakeAssertion.isActive
-            appendLog("Device returned to real location")
+            appendLog("Device returned to its real location")
         } catch let failure as CompanionError {
             error = failure
         } catch {
@@ -813,7 +954,11 @@ extension CompanionModel {
 // MARK: - Remote control
 
 extension CompanionModel {
-    var isControlServerRunning: Bool { controlServerAddress != nil }
+    var isControlServerRunning: Bool {
+        if case .off = controlServerStatus { return false }
+        if case .failed = controlServerStatus { return false }
+        return true
+    }
 
     var libraryLocations: [SimulatedLocation] { libraryStore.library.locations }
 
@@ -833,34 +978,74 @@ extension CompanionModel {
         return parts.joined(separator: " · ")
     }
 
-    /// Lets the iOS app steer the simulated location over the local network,
-    /// so the Mac can stay put while holding the developer session.
+    /// Lets the iOS app steer the spoofed location over the local network, so
+    /// the Mac can stay put while you move.
     func startControlServer() {
+        Preferences.remoteControlEnabled = true
+        controlServerStatus = .starting
+
         controlServer.handler = { [weak self] request in
             await self?.handleControlRequest(request) ?? .error(503, "Not ready.")
         }
+        controlServer.onStateChange = { [weak self] result in
+            Task { @MainActor in self?.controlServerBecame(result) }
+        }
+
         do {
             try controlServer.start()
-            let host = ControlServer.localAddresses().first ?? "this Mac"
-            controlServerAddress = "\(host):\(controlServer.port == 0 ? 8787 : controlServer.port)"
             controlServerCode = controlServer.pairingCode
+        } catch {
+            controlServerStatus = .failed(error.localizedDescription)
+            controlServerAddress = nil
+            appendLog("Remote control could not start: \(error.localizedDescription)")
+        }
+    }
+
+    /// The listener reports itself ready or failed asynchronously, so the UI
+    /// only claims to be listening once the port is actually bound.
+    private func controlServerBecame(_ result: Result<UInt16, Error>) {
+        switch result {
+        case let .success(port):
+            let host = ControlServer.localAddresses().first ?? "this Mac"
+            controlServerAddress = "\(host):\(port)"
+            controlServerCode = controlServer.pairingCode
+            controlServerStatus = .running
             wakeAssertion.acquire(reason: WakeAssertion.Reason.remoteControl)
             isKeepingAwake = wakeAssertion.isActive
             appendLog("Remote control listening on \(controlServerAddress ?? "")")
             Task { remoteAddress = await meshNetwork.remoteAddress() }
-        } catch {
-            self.error = .generic("Remote control could not start", error,
-                                  action: "Another app may be using the port. Try again.")
+
+        case let .failure(error):
+            controlServerAddress = nil
+            controlServerStatus = .failed(error.localizedDescription)
+            wakeAssertion.release(reason: WakeAssertion.Reason.remoteControl)
+            isKeepingAwake = wakeAssertion.isActive
+            appendLog("Remote control failed: \(error.localizedDescription)")
+            self.error = CompanionError(
+                title: "Remote control could not start",
+                details: error.localizedDescription,
+                recommendedAction: "macOS 15 and later ask permission the first time an app uses the local network. Allow Dissappear Companion in System Settings ▸ Privacy & Security ▸ Local Network, then switch Remote Control off and on again.",
+                technicalDetails: "NWListener on port 8787, then on a kernel-assigned port")
         }
     }
 
     func stopControlServer() {
+        Preferences.remoteControlEnabled = false
+        controlServer.onStateChange = nil
         controlServer.stop()
         controlServerAddress = nil
         controlServerCode = nil
+        controlServerStatus = .off
         wakeAssertion.release(reason: WakeAssertion.Reason.remoteControl)
         isKeepingAwake = wakeAssertion.isActive
         appendLog("Remote control stopped")
+    }
+
+    /// Invalidates the code a phone was paired with.
+    func regeneratePairingCode() {
+        controlServer.rotatePairingCode()
+        controlServerCode = controlServer.pairingCode
+        appendLog("Pairing code regenerated")
     }
 
     private func handleControlRequest(_ request: ControlServer.Request) async -> ControlServer.Response {
@@ -873,6 +1058,8 @@ extension CompanionModel {
                 "longitude": deviceLocation?.longitude ?? 0,
                 "name": deviceLocationName ?? "",
                 "ready": canSimulateDeviceLocation,
+                "tunnel": isDeveloperTunnelRunning,
+                "busy": isBusy,
                 "sessionLost": sessionLostReason ?? ""
             ])
 
@@ -891,17 +1078,24 @@ extension CompanionModel {
             guard (-90...90).contains(latitude), (-180...180).contains(longitude) else {
                 return .error(400, "That coordinate is out of range.")
             }
+            error = nil
             await setDeviceLocation(latitude: latitude, longitude: longitude,
                                     name: payload["name"] as? String)
             if let failure = error {
-                return .error(500, failure.details)
+                return .error(500, "\(failure.title): \(failure.details)")
+            }
+            // Without this the phone was told the spoof succeeded whenever the
+            // Mac was busy and the request had quietly been dropped.
+            guard deviceLocation != nil else {
+                return .error(500, "The companion did not apply the location.")
             }
             return .ok(["simulating": true, "latitude": latitude, "longitude": longitude])
 
         case ("POST", "/clear"):
+            error = nil
             await clearDeviceLocation()
             if let failure = error {
-                return .error(500, failure.details)
+                return .error(500, "\(failure.title): \(failure.details)")
             }
             return .ok(["simulating": false])
 
@@ -1059,6 +1253,23 @@ enum Preferences {
     static var profilePath: String? {
         get { defaults.string(forKey: "profilePath") }
         set { defaults.set(newValue, forKey: "profilePath") }
+    }
+
+    /// Set once the app has tried to install pymobiledevice3 by itself, so a
+    /// Mac with no network does not retry on every launch.
+    static var didAttemptToolingInstall: Bool {
+        get { defaults.bool(forKey: "didAttemptToolingInstall") }
+        set { defaults.set(newValue, forKey: "didAttemptToolingInstall") }
+    }
+
+    /// Remote control is on unless it was explicitly switched off, so a phone
+    /// can pair without anyone hunting through Settings first.
+    static var remoteControlEnabled: Bool {
+        get {
+            if defaults.object(forKey: "remoteControlEnabled") == nil { return true }
+            return defaults.bool(forKey: "remoteControlEnabled")
+        }
+        set { defaults.set(newValue, forKey: "remoteControlEnabled") }
     }
 
     /// Optional anisette server. Empty means this Mac's own anisette, which

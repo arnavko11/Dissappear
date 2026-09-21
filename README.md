@@ -1,19 +1,54 @@
 # Dissappear
 
-A two-target Apple project:
+**Dissappear spoofs the location your iPhone reports.** You pick a point
+anywhere on Earth, and the phone says it is there — to every app on it, not
+just this one. That is what it is for.
+
+It does this through Apple's own developer location service, the one behind
+Xcode's Simulate Location. That means it is visible to whoever holds the phone
+(Developer Mode has to be switched on by hand) and it is never hidden from
+them. Spoof phones you own.
 
 | Target | Platform | Role |
 | --- | --- | --- |
-| `Dissappear` | iOS 17+ | Location-simulation **test app** (in-app simulation only) |
-| `DissappearCompanion` | macOS 14+ | SwiftUI **control center** that prepares, builds, signs, installs and manages the development build |
+| `Dissappear` | iOS 17+ | The phone app: pick places, walk routes, steer the Mac remotely |
+| `DissappearCompanion` | macOS 14+ | Does the spoofing. Sets up the tooling, holds the developer session, serves the controls to the phone |
 
-Open `Dissappear.xcodeproj` in Xcode 16 or later.
+Open `Dissappear.xcodeproj` in Xcode 26 or later.
 
-## What the companion does
+## Two modes
 
-The companion offers three ways to get the test app onto a device. All three end
+| Mode | What sees the spoofed location |
+| --- | --- |
+| **iPhone app alone** | Dissappear itself, for trying a route out |
+| **iPhone app + Mac companion** | Every app on the phone — Maps, Find My, anything |
+
+Device-wide spoofing lasts as long as the Mac holds the session, so the Mac has
+to stay awake and the phone connected. The companion holds off idle sleep for
+you while a session is live.
+
+## Getting started
+
+Install the macOS companion from the `.pkg` in the
+[latest release](../../releases/latest), open it, and follow **Setup**. It
+checks each thing the developer location service needs, in order, and fixes
+what it can by itself:
+
+1. **Xcode** — linked straight to its App Store page, with the three steps after it
+2. **pymobiledevice3** — installed automatically into a private folder the app owns, no password, nothing else on the Mac touched
+3. **An iPhone** — connected, unlocked, trusting this Mac
+4. **Developer Mode** — on the phone, under Settings ▸ Privacy & Security
+5. **The developer tunnel** — iOS 17+ only, started behind the normal macOS password prompt
+6. **Pairing** — remote control is on by default; type its code into the phone app
+
+Then open **Locations**, pick anywhere, and the phone is there.
+
+## Getting the iPhone app onto a phone
+
+The companion offers three ways to install it. All three end
 in a build signed by Apple-issued credentials; none works around the
-development-signing lifetime.
+development-signing lifetime. Only the Apple ID path needs an anisette server,
+and **Settings ▸ Find One For Me** picks a working one from the published list.
 
 | Path | Needs | Good for |
 | --- | --- | --- |

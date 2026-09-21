@@ -48,11 +48,22 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 260)
                 }
+                Button("Find One For Me") {
+                    Task {
+                        await model.findAnisetteServer()
+                        anisetteServer = Preferences.anisetteServerString
+                    }
+                }
+                .disabled(model.isBusy)
+
                 if anisetteServer.trimmingCharacters(in: .whitespaces).isEmpty {
-                    Label("This Mac's own anisette will be used. macOS 26 and later withhold it from apps without Apple's private entitlements, so Apple ID sign-in fails with \"MID is invalid\".",
+                    Label("This Mac's own anisette will be used. macOS 26 and later withhold it from apps without Apple's private entitlements, so Apple ID sign-in fails with \"MID is invalid\". Find One For Me downloads the published list of servers and picks the first that answers.",
                           systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.secondary)
                 }
+                Label("None of this is needed to spoof a location. It only affects Build ▸ Apple ID Signing, which is one of three ways to get the iPhone app installed.",
+                      systemImage: "info.circle")
+                    .foregroundStyle(.secondary)
             } header: {
                 Text("Apple ID Sign-In")
             } footer: {
@@ -91,9 +102,20 @@ struct SettingsView: View {
                     get: { model.isControlServerRunning },
                     set: { $0 ? model.startControlServer() : model.stopControlServer() }))
 
+                StatusRow(label: "Status",
+                          value: model.controlServerStatus.message ?? model.controlServerStatus.label,
+                          state: serverState)
+
                 if let address = model.controlServerAddress, let code = model.controlServerCode {
-                    LabeledContent("Address", value: address)
-                    LabeledContent("Pairing Code", value: code)
+                    LabeledContent("Address") {
+                        Text(address).textSelection(.enabled)
+                    }
+                    LabeledContent("Pairing Code") {
+                        HStack {
+                            Text(code).monospaced().textSelection(.enabled)
+                            Button("New Code") { model.regeneratePairingCode() }
+                        }
+                    }
                     StatusRow(label: "Sleep",
                               value: model.isKeepingAwake ? "Staying awake" : "Normal",
                               state: model.isKeepingAwake ? .good : .inactive)
@@ -121,7 +143,7 @@ struct SettingsView: View {
             } header: {
                 Text("Remote Control")
             } footer: {
-                Text("Serves the location controls to your iPhone over the local network, so the Mac can stay put while you move. Requests must carry the pairing code, and nothing else is exposed.")
+                Text("Serves the spoofing controls to your iPhone over the local network, so the Mac can stay put while you move. It is on by default. Requests must carry the pairing code, and nothing but the location controls is exposed. macOS asks permission the first time it uses the local network — allow it, or the phone will never find this Mac.")
             }
 
             Section("About") {
@@ -140,6 +162,15 @@ struct SettingsView: View {
             if case let .success(url) = result {
                 model.configuration.projectPath = url.path
             }
+        }
+    }
+
+    private var serverState: StatusDot.State {
+        switch model.controlServerStatus {
+        case .running: return .good
+        case .starting: return .warning
+        case .failed: return .bad
+        case .off: return .inactive
         }
     }
 
