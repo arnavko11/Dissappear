@@ -33,6 +33,18 @@ struct RootView: View {
         model.isReadyToSpoof ? .devices : .setup
     }
 
+    /// Keeps the alert readable: the details are there, but a wall of tool
+    /// output goes to the clipboard rather than into a dialog.
+    private static func message(for failure: CompanionError) -> String {
+        var text = "\(failure.details)\n\n\(failure.recommendedAction)"
+        let technical = failure.technicalDetails.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !technical.isEmpty {
+            let excerpt = technical.split(separator: "\n").suffix(8).joined(separator: "\n")
+            text += "\n\n\(excerpt)"
+        }
+        return text
+    }
+
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
@@ -64,10 +76,28 @@ struct RootView: View {
             // New users land on Setup; once spoofing works, on the device.
             if selection == nil { selection = defaultSection }
         }
-        .alert(item: $model.error) { error in
-            Alert(title: Text(error.title),
-                  message: Text("\(error.details)\n\n\(error.recommendedAction)"),
-                  dismissButton: .default(Text("OK")))
+        // The technical details used to be collected and then never shown,
+        // which left failures like a tunnel that would not bind as a dead end.
+        .alert(model.error?.title ?? "Error",
+               isPresented: Binding(get: { model.error != nil },
+                                    set: { if !$0 { model.error = nil } }),
+               presenting: model.error) { failure in
+            Button("Copy Details") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString("""
+                \(failure.title)
+
+                \(failure.details)
+
+                \(failure.recommendedAction)
+
+                \(failure.technicalDetails)
+                """, forType: .string)
+                model.error = nil
+            }
+            Button("OK", role: .cancel) { model.error = nil }
+        } message: { failure in
+            Text(Self.message(for: failure))
         }
     }
 }

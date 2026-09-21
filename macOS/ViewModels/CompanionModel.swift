@@ -747,6 +747,22 @@ extension CompanionModel {
         }
     }
 
+    /// Removes the tunnel daemon, so it is not left running as root.
+    func stopDeveloperTunnel() async {
+        activity = "Stopping the developer tunnel"
+        defer { if !isBusy { activity = nil } }
+
+        do {
+            try await locationSimulation.stopTunnel()
+            isDeveloperTunnelRunning = await locationSimulation.isTunnelRunning()
+            appendLog("Developer tunnel removed")
+        } catch let failure as CompanionError {
+            error = failure
+        } catch {
+            self.error = .generic("Stopping the developer tunnel failed", error)
+        }
+    }
+
     /// Mounts the developer disk image so the location service is reachable.
     func prepareDeviceForLocation() async {
         guard !isBusy, let tool = locationTooling.tool else { return }
