@@ -93,7 +93,8 @@ struct DeviceDetailView: View {
                                   state: model.locationTooling.tool == nil ? .bad : .good)
                         StatusRow(label: "Reported Location",
                                   value: deviceLocationValue,
-                                  state: model.deviceLocation == nil ? .inactive : .good)
+                                  state: model.deviceLocation == nil ? .inactive
+                                       : (model.isDeviceDetached ? .warning : .good))
                         StatusRow(label: "Developer Tunnel",
                                   value: model.isDeveloperTunnelRunning ? "Running" : "Not running",
                                   state: model.isDeveloperTunnelRunning ? .good : tunnelState)
@@ -136,7 +137,8 @@ struct DeviceDetailView: View {
                                 }
 
                                 if model.deviceLocation != nil {
-                                    Button("Stop Spoofing", role: .destructive) {
+                                    Button(model.isDeviceDetached ? "Retry Stop Spoofing" : "Stop Spoofing",
+                                           role: .destructive) {
                                         Task { await model.clearDeviceLocation() }
                                     }
                                     .disabled(model.isBusy)
@@ -146,12 +148,17 @@ struct DeviceDetailView: View {
                     } header: {
                         Text("Location Spoofing")
                     } footer: {
-                        Text("Replaces the location this iPhone reports to every app on it — Maps, Find My, anything. It runs through Apple's own developer location service, so Developer Mode has to be on and the device has to trust this Mac. Pick where to appear in Locations, or a path to walk in Routes. Stop Spoofing puts real GPS back.")
+                        Text("Replaces the location this iPhone reports to every app on it — Maps, Find My, anything. It runs through Apple's own developer location service, so Developer Mode has to be on and the device has to trust this Mac. Pick where to appear in Locations, or a path to walk in Routes. Stop Spoofing puts real GPS back. Unplugging the phone does not: the coordinate stays in force on it until it is cleared or the phone restarts, so stop spoofing before you disconnect.")
                     }
 
                 }
                 .formStyle(.grouped)
 
+                if model.isDeviceDetached {
+                    GuidanceCard(title: "The Spoofed Location Is Still Set",
+                                 message: CompanionModel.detachedExplanation,
+                                 systemImage: "cable.connector.slash")
+                }
                 if device.developerMode == .disabled || device.developerMode == .restricted {
                     GuidanceCard(title: "Enable Developer Mode",
                                  message: "On \(device.name), open Settings ▸ Privacy & Security ▸ Developer Mode, turn it on and restart the device when prompted.",
@@ -221,7 +228,8 @@ struct DeviceDetailView: View {
     private var deviceLocationValue: String {
         guard let coordinate = model.deviceLocation else { return "Real GPS" }
         let name = model.deviceLocationName.map { "\($0) · " } ?? ""
-        return name + String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude)
+        let coordinates = String(format: "%.5f, %.5f", coordinate.latitude, coordinate.longitude)
+        return name + coordinates + (model.isDeviceDetached ? " · phone disconnected" : "")
     }
 
     private var connectionDescription: String {

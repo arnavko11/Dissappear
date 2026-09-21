@@ -31,6 +31,9 @@ final class CompanionModel: ObservableObject {
     @Published private(set) var toolingInstallActivity: String?
     /// Set when a live session stopped on its own, so the phone can say why.
     @Published private(set) var sessionLostReason: String?
+    /// The phone left while a spoofed location was in force on it. The spoof
+    /// is still set; nothing here can reach it until the phone is back.
+    @Published private(set) var isDeviceDetached = false
     @Published private(set) var controlServerAddress: String?
     @Published private(set) var controlServerCode: String?
     @Published private(set) var controlServerStatus: ControlServerStatus = .off
@@ -834,6 +837,7 @@ extension CompanionModel {
             deviceLocation = SimulatedCoordinate(latitude: latitude, longitude: longitude)
             deviceLocationName = name
             sessionLostReason = nil
+            isDeviceDetached = false
             monitorLocationSession()
             wakeAssertion.acquire(reason: WakeAssertion.Reason.locationSession)
             isKeepingAwake = wakeAssertion.isActive
@@ -850,42 +854,84 @@ extension CompanionModel {
         }
     }
 
-    /// Watches the held session so a simulation that dies — the device
-    /// unplugged, the Mac slept, the tool crashed — is reported rather than
-    /// leaving the UI claiming a location that is no longer set.
+    /// Watches a live spoof, both kinds.
+    ///
+    /// A held session dies with its process. A latched one does not: the
+    /// coordinate stays on the phone, so unplugging the cable does not undo
+    /// it — it only takes away the means to undo it. That case had no watcher
+    /// at all, so the app went on claiming it was spoofing a device that was
+    /// no longer there, with no way to put the real location back.
     private func monitorLocationSession() {
         locationSessionMonitor?.cancel()
-        // A latched spoof outlives every process, so there is nothing to watch
-        // and nothing that can be "lost".
-        guard let handle = locationSession?.handle else { return }
+        guard deviceLocation != nil else { return }
+        let watchedUDID = selectedDevice?.udid
 
         locationSessionMonitor = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(3))
-                guard let self, !Task.isCancelled else { return }
-                guard self.locationSession?.handle == handle else { return }
-                if await self.locationSimulation.isSessionActive(handle) { continue }
+                try? await Task.sleep(for: .seconds(4))
+                guard let self, !Task.isCancelled, self.deviceLocation != nil else { return }
 
-                self.locationSession = nil
-                self.deviceLocation = nil
-                self.sessionLostReason = """
-                The simulation stopped. The device may have been unplugged, or the \
-                developer tunnel closed.
-                """
-                self.wakeAssertion.release(reason: WakeAssertion.Reason.locationSession)
-                self.isKeepingAwake = self.wakeAssertion.isActive
-                self.appendLog("✗ Location session ended unexpectedly")
-                return
+                // A held process that exited means the spoof really is over.
+                if let handle = self.locationSession?.handle,
+                   !(await self.locationSimulation.isSessionActive(handle)) {
+                    self.locationSession = nil
+                    self.deviceLocation = nil
+                    self.sessionLostReason = "The spoofing session ended, so the device is back on real GPS."
+                    self.wakeAssertion.release(reason: WakeAssertion.Reason.locationSession)
+                    self.isKeepingAwake = self.wakeAssertion.isActive
+                    self.appendLog("✗ Location session ended")
+                    return
+                }
+
+                // The phone going away is not the spoof ending. It is the
+                // spoof becoming unreachable while still in force.
+                guard let udid = watchedUDID else { continue }
+                let present = await self.isDevicePresent(udid: udid)
+
+                if !present, !self.isDeviceDetached {
+                    self.isDeviceDetached = true
+                    self.sessionLostReason = Self.detachedExplanation
+                    self.appendLog("⚠︎ The iPhone was disconnected while a spoofed location was set")
+                } else if present, self.isDeviceDetached {
+                    self.isDeviceDetached = false
+                    self.sessionLostReason = nil
+                    self.appendLog("The iPhone is back — the spoofed location can be changed or cleared again")
+                    await self.refreshDevices()
+                }
             }
         }
     }
 
+    static let detachedExplanation = """
+    The iPhone was unplugged, and the spoofed location is still in force on \
+    it: it stays until something clears it. Plug the phone back in and press \
+    Stop Spoofing. Restarting the phone also clears it.
+    """
+
+    /// A cheap presence check for the watcher, which runs every few seconds.
+    private func isDevicePresent(udid: String) async -> Bool {
+        let discovery = await deviceService.discover()
+        return discovery.devices.contains { $0.udid == udid && $0.isPhysicalIOSDevice }
+    }
+
     func clearDeviceLocation() async {
+        // A phone that left mid-spoof is still spoofed, so it is worth looking
+        // again before refusing: the usual reason for clearing is that the
+        // cable has just been plugged back in.
+        if selectedDevice == nil || isDeviceDetached {
+            await refreshDevices()
+        }
+
         guard let device = selectedDevice, let tool = locationTooling.tool else {
-            error = CompanionError(title: "Nothing to Restore",
-                                   details: "No iPhone is selected, or pymobiledevice3 is not installed.",
-                                   recommendedAction: "Connect an iPhone and install the location tooling from the Devices screen.",
-                                   technicalDetails: "device = \(selectedDevice?.name ?? "nil")")
+            error = CompanionError(
+                title: "The iPhone Is Not Connected",
+                details: deviceLocation != nil
+                    ? "A spoofed location is still set on the phone, and it stays set until something clears it. This Mac cannot reach the phone to do that."
+                    : "No iPhone is connected, or pymobiledevice3 is not installed.",
+                recommendedAction: deviceLocation != nil
+                    ? "Plug the phone back in, unlock it, then press Stop Spoofing again. Restarting the phone also clears it."
+                    : "Connect an iPhone, and install the location tooling from Setup.",
+                technicalDetails: "device = \(selectedDevice?.name ?? "nil"), tool = \(locationTooling.tool?.executablePath ?? "nil")")
             return
         }
         guard !isBusy else {
@@ -912,6 +958,7 @@ extension CompanionModel {
             }
             deviceLocation = nil
             deviceLocationName = nil
+            isDeviceDetached = false
             wakeAssertion.release(reason: WakeAssertion.Reason.locationSession)
             isKeepingAwake = wakeAssertion.isActive
             appendLog("Device returned to its real location")
@@ -1102,6 +1149,7 @@ extension CompanionModel {
                 "name": deviceLocationName ?? "",
                 "ready": canSimulateDeviceLocation,
                 "tunnel": isDeveloperTunnelRunning,
+                "detached": isDeviceDetached,
                 "busy": isBusy,
                 "sessionLost": sessionLostReason ?? ""
             ])
