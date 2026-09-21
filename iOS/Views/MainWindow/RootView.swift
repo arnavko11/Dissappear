@@ -7,7 +7,7 @@ struct RootView: View {
     @Environment(SimulationViewModel.self) private var simulation
     @Environment(RouteEditorViewModel.self) private var routeEditor
     @Environment(LocationSearchService.self) private var searchService
-    @Environment(RemoteControlClient.self) private var client
+    @Environment(SpoofingCoordinator.self) private var spoofing
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.modelContext) private var context
     @AppStorage(PreferenceKey.didCompleteOnboarding) private var didCompleteOnboarding = false
@@ -105,7 +105,7 @@ struct RootView: View {
     /// rather than offering controls that would only move a dot in here.
     @ViewBuilder
     private var disconnectedBanner: some View {
-        if let reason = client.unavailableReason {
+        if let reason = spoofing.unavailableReason {
             Button {
                 main.section = .remote
                 isLibraryPresented = true
@@ -188,7 +188,7 @@ struct RootView: View {
     /// Returns the app to its default test environment.
     private func resetEnvironment() {
         simulation.resetSession()
-        Task { await client.clearLocation() }
+        Task { await spoofing.clear() }
         withAnimation(.easeInOut(duration: 0.2)) {
             main.previewPlace = nil
             main.editingRoute = nil

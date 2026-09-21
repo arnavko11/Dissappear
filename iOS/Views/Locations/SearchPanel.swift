@@ -163,7 +163,7 @@ struct SearchPanel: View {
 /// Details and actions for the currently previewed place.
 struct PreviewCard: View {
     @Environment(MainViewModel.self) private var main
-    @Environment(RemoteControlClient.self) private var client
+    @Environment(SpoofingCoordinator.self) private var spoofing
     @Environment(RouteEditorViewModel.self) private var routeEditor
     @Environment(\.modelContext) private var context
     @Query private var savedLocations: [SavedLocation]
@@ -197,15 +197,15 @@ struct PreviewCard: View {
         Button {
             main.focus(on: place.coordinate)
             Task {
-                await client.setLocation(latitude: place.coordinate.latitude,
-                                         longitude: place.coordinate.longitude,
-                                         name: place.name)
+                await spoofing.spoof(latitude: place.coordinate.latitude,
+                                     longitude: place.coordinate.longitude,
+                                     name: place.name)
             }
         } label: {
             Label("Spoof This Location", systemImage: "location.fill")
         }
         .glassButton(prominent: true)
-        .disabled(!client.canSpoof)
+        .disabled(!spoofing.canSpoof)
 
         Button(action: toggleSave) {
             Label(isSaved ? "Saved" : "Save", systemImage: isSaved ? "star.fill" : "star")

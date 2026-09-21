@@ -7,6 +7,7 @@ struct SimulationBar: View {
     @Environment(MainViewModel.self) private var main
     @Environment(SimulationEngine.self) private var engine
     @Environment(SimulationViewModel.self) private var simulation
+    @Environment(SpoofingCoordinator.self) private var spoofing
     @Environment(RemoteControlClient.self) private var client
     @AppStorage(PreferenceKey.distanceUnit) private var distanceUnitRaw = DistanceUnit.automatic.rawValue
 
@@ -65,7 +66,7 @@ struct SimulationBar: View {
                 }
                 .glassButton(prominent: true)
                 .keyboardShortcut(.space, modifiers: [])
-                .disabled(!simulation.canStart || !client.canSpoof)
+                .disabled(!simulation.canStart || !spoofing.canSpoof)
                 .accessibilityLabel(engine.phase == .running ? "Pause" : "Start spoofing")
 
                 Button {
@@ -74,7 +75,7 @@ struct SimulationBar: View {
                     Image(systemName: "arrow.counterclockwise").frame(width: 26, height: 22)
                 }
                 .glassButton()
-                .disabled(!simulation.canStart || !client.canSpoof)
+                .disabled(!simulation.canStart || !spoofing.canSpoof)
                 .accessibilityLabel("Restart")
 
                 Button {

@@ -2,7 +2,7 @@ import SwiftData
 import SwiftUI
 
 struct RoutesPanel: View {
-    @Environment(RemoteControlClient.self) private var client
+    @Environment(SpoofingCoordinator.self) private var spoofing
     @Environment(MainViewModel.self) private var main
     @Environment(SimulationViewModel.self) private var simulation
     @Environment(\.modelContext) private var context
@@ -93,7 +93,7 @@ struct RoutesPanel: View {
                                   message: "Add at least two waypoints before walking it."))
             return
         }
-        if let reason = client.unavailableReason {
+        if let reason = spoofing.unavailableReason {
             main.present(AppError(title: "No Companion Connected", message: reason))
             return
         }

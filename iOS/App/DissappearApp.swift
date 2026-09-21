@@ -13,7 +13,9 @@ struct DissappearApp: App {
     @State private var searchService = LocationSearchService()
     @State private var routeEditor = RouteEditorViewModel()
     @State private var authorization = LocationAuthorizationService()
-    @State private var remoteControl = RemoteControlClient()
+    @State private var remoteControl: RemoteControlClient
+    @State private var pairingRecords: PairingRecordStore
+    @State private var spoofing: SpoofingCoordinator
     private let bridge = RemoteLocationBridge()
 
     private let container: ModelContainer
@@ -22,6 +24,13 @@ struct DissappearApp: App {
         let engine = SimulationEngine()
         _engine = State(initialValue: engine)
         _simulation = State(initialValue: SimulationViewModel(engine: engine))
+
+        let records = PairingRecordStore()
+        let client = RemoteControlClient()
+        _pairingRecords = State(initialValue: records)
+        _remoteControl = State(initialValue: client)
+        _spoofing = State(initialValue: SpoofingCoordinator(pairingRecords: records, client: client))
+
         container = Self.makeContainer()
     }
 
@@ -35,6 +44,8 @@ struct DissappearApp: App {
                 .environment(routeEditor)
                 .environment(authorization)
                 .environment(remoteControl)
+                .environment(pairingRecords)
+                .environment(spoofing)
                 .preferredColorScheme(AppearanceOption(rawValue: appearanceRaw)?.colorScheme)
                 .task {
                     engine.speedMultiplier = defaultSpeed
@@ -43,7 +54,7 @@ struct DissappearApp: App {
                 }
                 .task {
                     // A playing route drives the real device, not a dot in here.
-                    await bridge.run(engine: engine, client: remoteControl)
+                    await bridge.run(engine: engine, spoofing: spoofing)
                 }
         }
         .modelContainer(container)
