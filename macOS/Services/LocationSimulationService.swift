@@ -286,6 +286,205 @@ struct LocationSimulationService {
         throw error
     }
 
+    // MARK: - Developer tunnel
+
+    /// Whether `pymobiledevice3 remote tunneld` is already answering.
+    func isTunnelRunning() async -> Bool {
+        guard let url = URL(string: "http://127.0.0.1:\(Self.tunneldPort)/") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 1.5
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        return (try? await URLSession.shared.data(for: request)) != nil
+    }
+
+    /// Starts the tunnel daemon behind the standard macOS password panel.
+    ///
+    /// It is installed as a launchd daemon rather than backgrounded from the
+    /// password prompt. `do shell script` reaps the process group it spawned
+    /// as soon as it returns, so a `nohup … &` daemon died the instant the
+    /// panel closed and the port was never bound. launchd owns the process
+    /// instead, which also means it comes back after a restart — the tunnel is
+    /// set up once rather than every time the Mac boots.
+    func startTunnel(tool: Tool) async throws {
+        guard tool.version != "devicectl" else { return }
+        if await isTunnelRunning() { return }
+
+        // Check the subcommand exists before asking anyone for a password.
+        let help = try await runner.run(tool.executablePath, ["remote", "tunneld", "--help"])
+        guard help.succeeded else {
+            throw CompanionError(
+                title: "This pymobiledevice3 Has No Tunnel",
+                details: "The installed version does not provide `remote tunneld`.",
+                recommendedAction: "Reinstall the tooling from Setup, which fetches a current version.",
+                technicalDetails: help.combinedOutput)
+        }
+
+        // A root daemon must not execute a binary that this user can rewrite:
+        // anything running as the user could then swap it and gain root. The
+        // app's own environment lives in the user's Application Support, so a
+        // root-owned copy is made and the daemon points at that.
+        let ownsTool = tool.executablePath == PyMobileDevice3Installer.executableURL.path
+        let source = PyMobileDevice3Installer.environmentURL.path
+        let arguments = ownsTool
+            ? [Self.systemToolDirectory + "/bin/python3", "-m", "pymobiledevice3", "remote", "tunneld"]
+            : [tool.executablePath, "remote", "tunneld"]
+
+        let staged = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(Self.daemonLabel).plist")
+        try Self.daemonPlist(arguments: arguments)
+            .write(to: staged, atomically: true, encoding: .utf8)
+
+        var steps = ["mkdir -p " + Self.shellQuoted(Self.logDirectory)]
+        if ownsTool {
+            steps += [
+                "rm -rf " + Self.shellQuoted(Self.systemToolDirectory),
+                "mkdir -p " + Self.shellQuoted((Self.systemToolDirectory as NSString).deletingLastPathComponent),
+                // Scripts inside a venv carry absolute shebangs, so the copy is
+                // run as `python3 -m pymobiledevice3` rather than through them.
+                "cp -R " + Self.shellQuoted(source) + " " + Self.shellQuoted(Self.systemToolDirectory),
+                "chown -R root:wheel " + Self.shellQuoted(Self.systemToolDirectory),
+                "chmod -R go-w " + Self.shellQuoted(Self.systemToolDirectory)
+            ]
+        }
+        steps += [
+            "cp " + Self.shellQuoted(staged.path) + " " + Self.shellQuoted(Self.daemonPlistPath),
+            "chown root:wheel " + Self.shellQuoted(Self.daemonPlistPath),
+            "chmod 644 " + Self.shellQuoted(Self.daemonPlistPath),
+            // Replace any earlier copy rather than failing as already loaded.
+            "launchctl bootout system/" + Self.daemonLabel + " 2>/dev/null || true",
+            "launchctl bootstrap system " + Self.shellQuoted(Self.daemonPlistPath)
+        ]
+        let script = "do shell script " + Self.appleScriptQuoted(steps.joined(separator: "; "))
+            + " with administrator privileges"
+
+        let result = try await runner.run("/usr/bin/osascript", ["-e", script])
+        guard result.succeeded else {
+            if result.combinedOutput.localizedCaseInsensitiveContains("cancel")
+                || result.combinedOutput.contains("-128") {
+                throw CompanionError(
+                    title: "Developer Tunnel Not Started",
+                    details: "The administrator prompt was cancelled.",
+                    recommendedAction: "The tunnel needs administrator rights because it opens a network interface on this Mac. Try again when you are ready.",
+                    technicalDetails: result.combinedOutput)
+            }
+            throw Self.error(stage: "Installing the developer tunnel", result: result)
+        }
+
+        // launchd starts it asynchronously, and the first run imports a large
+        // Python package tree, so this is slower than a bare process launch.
+        for _ in 0..<40 {
+            if await isTunnelRunning() { return }
+            try? await Task.sleep(for: .milliseconds(750))
+        }
+
+        throw CompanionError(
+            title: "Developer Tunnel Did Not Answer",
+            details: "The daemon was installed but nothing is listening on port \(Self.tunneldPort).",
+            recommendedAction: "The daemon's own output is below — it usually names the cause. Stop Tunnel and try again once it is addressed.",
+            technicalDetails: await Self.tunnelDiagnostics())
+    }
+
+    /// Removes the daemon, so a tunnel the user did not want is not left
+    /// running as root forever.
+    func stopTunnel() async throws {
+        let steps = [
+            "launchctl bootout system/" + Self.daemonLabel + " 2>/dev/null || true",
+            "rm -f " + Self.shellQuoted(Self.daemonPlistPath),
+            "rm -rf " + Self.shellQuoted(Self.systemToolDirectory)
+        ]
+        let script = "do shell script " + Self.appleScriptQuoted(steps.joined(separator: "; "))
+            + " with administrator privileges"
+
+        let result = try await runner.run("/usr/bin/osascript", ["-e", script])
+        guard result.succeeded else {
+            throw Self.error(stage: "Stopping the developer tunnel", result: result)
+        }
+    }
+
+    /// Whatever the daemon reported, so a failure is explained here instead of
+    /// sending the user to find a log file by hand.
+    private static func tunnelDiagnostics() async -> String {
+        var parts: [String] = []
+
+        for path in [logPath, errorLogPath] {
+            guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            let tail = contents.split(separator: "\n").suffix(40).joined(separator: "\n")
+            if !tail.isEmpty { parts.append("\(path):\n\(tail)") }
+        }
+
+        if let state = try? await ProcessRunner.shared.run("/bin/launchctl", ["print", "system/\(daemonLabel)"]),
+           !state.combinedOutput.isEmpty {
+            let tail = state.combinedOutput.split(separator: "\n").prefix(25).joined(separator: "\n")
+            parts.append("launchctl print system/\(daemonLabel):\n\(tail)")
+        }
+
+        return parts.isEmpty
+            ? "The daemon produced no output at \(logPath)."
+            : parts.joined(separator: "\n\n")
+    }
+
+    // MARK: - launchd daemon
+
+    private static let daemonLabel = "com.dissappear.tunneld"
+    private static let daemonPlistPath = "/Library/LaunchDaemons/com.dissappear.tunneld.plist"
+    private static let logDirectory = "/Library/Logs/Dissappear"
+    /// Root-owned copy of the tool, so the daemon never runs user-writable code.
+    private static let systemToolDirectory = "/Library/Application Support/Dissappear/tunnel"
+    static let logPath = "/Library/Logs/Dissappear/tunneld.log"
+    static let errorLogPath = "/Library/Logs/Dissappear/tunneld.error.log"
+
+    private static func daemonPlist(arguments: [String]) -> String {
+        let argumentXML = arguments
+            .map { "        <string>\(xmlEscaped($0))</string>" }
+            .joined(separator: "\n")
+        return plist(argumentXML: argumentXML)
+    }
+
+    private static func plist(argumentXML: String) -> String {
+        """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>Label</key>
+            <string>\(daemonLabel)</string>
+            <key>ProgramArguments</key>
+            <array>
+        \(argumentXML)
+            </array>
+            <key>RunAtLoad</key>
+            <true/>
+            <key>KeepAlive</key>
+            <true/>
+            <key>StandardOutPath</key>
+            <string>\(logPath)</string>
+            <key>StandardErrorPath</key>
+            <string>\(errorLogPath)</string>
+            <key>ProcessType</key>
+            <string>Interactive</string>
+        </dict>
+        </plist>
+        """
+    }
+
+    private static func xmlEscaped(_ value: String) -> String {
+        value.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+    }
+
+    private static func shellQuoted(_ value: String) -> String {
+        let escaped = value.replacingOccurrences(of: "'", with: "'\\''")
+        return "'" + escaped + "'"
+    }
+
+    private static func appleScriptQuoted(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"" + escaped + "\""
+    }
+
     func endSession(_ handle: UUID) async {
         await runner.stop(handle)
     }
