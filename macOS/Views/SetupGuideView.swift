@@ -110,13 +110,15 @@ struct SetupGuideView: View {
             SetupStep(
                 title: "Start the developer tunnel",
                 detail: model.isDeveloperTunnelRunning
-                    ? "Running."
-                    : "iOS 17 and later reach the location service over a tunnel that needs administrator rights. macOS will ask for your password.",
+                    ? "Running, and it starts itself after a restart."
+                    : "iOS 17 and later reach the location service over a tunnel that needs administrator rights. macOS asks for your password once, then it runs itself from then on.",
                 isDone: model.isDeveloperTunnelRunning || model.locationTooling.usesAppleTooling,
                 instructions: nil,
                 action: model.locationTooling.tool == nil
                     ? nil
-                    : .init(title: "Start Tunnel", run: { Task { await model.startDeveloperTunnel() } })),
+                    : model.isDeveloperTunnelRunning
+                        ? .init(title: "Stop Tunnel", run: { Task { await model.stopDeveloperTunnel() } })
+                        : .init(title: "Start Tunnel", run: { Task { await model.startDeveloperTunnel() } })),
 
             SetupStep(
                 title: "Pair your iPhone app",

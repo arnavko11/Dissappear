@@ -122,10 +122,17 @@ struct DeviceDetailView: View {
                                 .disabled(model.isBusy)
 
                                 if needsTunnel {
-                                    Button("Start Developer Tunnel") {
-                                        Task { await model.startDeveloperTunnel() }
+                                    if model.isDeveloperTunnelRunning {
+                                        Button("Stop Tunnel") {
+                                            Task { await model.stopDeveloperTunnel() }
+                                        }
+                                        .disabled(model.isBusy)
+                                    } else {
+                                        Button("Start Developer Tunnel") {
+                                            Task { await model.startDeveloperTunnel() }
+                                        }
+                                        .disabled(model.isBusy)
                                     }
-                                    .disabled(model.isBusy)
                                 }
 
                                 if model.deviceLocation != nil {
