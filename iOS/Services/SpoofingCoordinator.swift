@@ -77,6 +77,7 @@ final class SpoofingCoordinator {
         case .onDevice:
             do {
                 try await onDevice().spoof(latitude: latitude, longitude: longitude)
+                hasPushedOnDevice = true
                 lastOnDeviceFailure = nil
             } catch {
                 lastOnDeviceFailure = error.localizedDescription
@@ -94,6 +95,7 @@ final class SpoofingCoordinator {
         case .onDevice:
             do {
                 try await onDevice().clear()
+                hasPushedOnDevice = false
                 lastOnDeviceFailure = nil
             } catch {
                 lastOnDeviceFailure = error.localizedDescription
@@ -108,6 +110,19 @@ final class SpoofingCoordinator {
     /// True while the companion is replaying a route by itself, so nothing
     /// else pushes coordinates over the top of it.
     private(set) var isCompanionPlayingRoute = false
+
+    /// Whether a location is currently in force on the device, by either
+    /// route. Stopping has to stay available even when the local clock is
+    /// idle, because the device can be spoofed without one running.
+    var isSpoofing: Bool {
+        if isCompanionPlayingRoute { return true }
+        if client.status?.simulating == true { return true }
+        return hasPushedOnDevice
+    }
+
+    /// Set once this phone has applied a location to itself, since nothing
+    /// else reports that state back.
+    private var hasPushedOnDevice = false
 
     /// Starts a route the best way the current route allows.
     ///
@@ -135,6 +150,7 @@ final class SpoofingCoordinator {
         switch route {
         case .onDevice:
             try? await onDevice().spoof(latitude: latitude, longitude: longitude)
+            hasPushedOnDevice = true
         case .companion:
             await client.push(latitude: latitude, longitude: longitude, name: name)
         case .unavailable:

@@ -66,7 +66,10 @@ struct SimulationBar: View {
                 }
                 .glassButton(prominent: true)
                 .keyboardShortcut(.space, modifiers: [])
-                .disabled(!simulation.canStart || !spoofing.canSpoof)
+                // The companion replays a track in one go; there is no way to
+                // halt it partway, so pausing is not offered while it does.
+                .disabled(!simulation.canStart || !spoofing.canSpoof
+                          || spoofing.isCompanionPlayingRoute)
                 .accessibilityLabel(engine.phase == .running ? "Pause" : "Start spoofing")
 
                 Button {
@@ -79,12 +82,15 @@ struct SimulationBar: View {
                 .accessibilityLabel("Restart")
 
                 Button {
+                    // Stopping has to reach the device: halting the clock in
+                    // here left the phone reporting the last spoofed point.
                     simulation.stop()
+                    Task { await spoofing.clear() }
                 } label: {
                     Image(systemName: "stop.fill").frame(width: 26, height: 22)
                 }
                 .glassButton()
-                .disabled(!engine.isActive)
+                .disabled(!engine.isActive && !spoofing.isSpoofing)
                 .accessibilityLabel("Stop spoofing")
 
                 SpeedControl(speed: $simulation.speed)
