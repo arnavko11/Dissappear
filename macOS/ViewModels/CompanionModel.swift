@@ -967,11 +967,11 @@ extension CompanionModel {
     }
 
     static let detachedExplanation = """
-    The iPhone has left, and it is still reporting the spoofed location — a \
-    spoof outlives the connection that set it, so this is the way to take one \
-    out of the house. What you cannot do from here is change it: that needs \
-    the phone back on USB or on this network. Reconnect and press Stop \
-    Spoofing to end it, or restart the phone.
+    The iPhone has gone, and the session spoofing it went with it. A spoof \
+    lasts only while that session is held, so the phone is either back on \
+    real GPS already or stuck on the last coordinate because the session \
+    broke rather than closed. Reconnect and press Stop Spoofing to be sure of \
+    which; restarting the phone also clears it.
     """
 
     /// A cheap presence check for the watcher, which runs every few seconds.

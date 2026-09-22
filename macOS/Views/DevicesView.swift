@@ -152,7 +152,7 @@ struct DeviceDetailView: View {
                     } header: {
                         Text("Location Spoofing")
                     } footer: {
-                        Text("The Mac drives this through pymobiledevice3; the iPhone app, spoofing on its own, uses the idevice library instead. Two clients, the same Apple service — which one is in play depends on where the request comes from.\n\nReplaces the location this iPhone reports to every app on it — Maps, Find My, anything. It runs through Apple's own developer location service, so Developer Mode has to be on and the device has to trust this Mac. Pick where to appear in Locations, or a path to walk in Routes. Stop Spoofing puts real GPS back. Unplugging does not: the coordinate stays in force until it is cleared or the phone restarts. To keep control of it without the cable, turn on Wi-Fi sync for this phone in Finder — the companion will then reach it over the network.")
+                        Text("The Mac drives this through pymobiledevice3; the iPhone app, spoofing on its own, uses the idevice library instead. Two clients, the same Apple service — which one is in play depends on where the request comes from.\n\nReplaces the location this iPhone reports to every app on it — Maps, Find My, anything. It runs through Apple's own developer location service, so Developer Mode has to be on and the device has to trust this Mac. Pick where to appear in Locations, or a path to walk in Routes. Stop Spoofing puts real GPS back, and so does quitting this app: the spoof lasts only as long as the session holding it. Unplugging breaks that session rather than closing it, which can leave the phone stuck on the last coordinate — so stop before you disconnect. To keep the phone spoofed without a cable, turn on Wi-Fi sync for it in Finder and leave this Mac running; to spoof with no computer at all, use the iPhone app's own path.")
                     }
 
                     Section {
@@ -169,7 +169,7 @@ struct DeviceDetailView: View {
                 .formStyle(.grouped)
 
                 if model.isDeviceDetached {
-                    GuidanceCard(title: "Spoofing Without the Cable",
+                    GuidanceCard(title: "The iPhone Went Away Mid-Spoof",
                                  message: CompanionModel.detachedExplanation,
                                  systemImage: "cable.connector.slash")
                 }
