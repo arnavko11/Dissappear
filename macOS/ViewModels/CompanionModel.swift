@@ -1088,18 +1088,43 @@ extension CompanionModel {
     }
 
     /// One point per second of travel, so playback moves at the route's speed.
+    /// Turns a route's corners into a track the device can be walked along.
+    ///
+    /// The point count is capped. One point per second of travel is right for
+    /// a short route, but a long one at walking pace works out at hundreds of
+    /// thousands, which is a GPX file nothing wants to write or read; past
+    /// the cap the spacing simply widens.
     private static func densify(route: SimulatedRoute) -> [(latitude: Double, longitude: Double)] {
-        var points: [(latitude: Double, longitude: Double)] = []
-        let step = max(route.speed, 0.5)
+        let maximumPoints = 20_000
 
-        for (start, end) in zip(route.waypoints, route.waypoints.dropFirst()) {
+        let legs = Array(zip(route.waypoints, route.waypoints.dropFirst()))
+        let total = legs.reduce(0.0) { sum, leg in
+            let distance = GeoMath.distance(leg.0, leg.1)
+            return sum + (distance.isFinite ? distance : 0)
+        }
+
+        // A metre a point at the slowest, and wider if the route is long
+        // enough that the cap would otherwise be passed.
+        var step = max(route.speed, 0.5)
+        if total / step > Double(maximumPoints) {
+            step = total / Double(maximumPoints)
+        }
+
+        var points: [(latitude: Double, longitude: Double)] = []
+        for (start, end) in legs {
             let distance = GeoMath.distance(start, end)
-            let count = max(1, Int(distance / step))
+            // A non-finite distance means a corrupt coordinate, and Int() of
+            // one traps rather than failing.
+            guard distance.isFinite, step > 0 else { continue }
+
+            let count = max(1, min(maximumPoints, Int(distance / step)))
             for index in 0..<count {
                 let coordinate = GeoMath.interpolate(start, end, fraction: Double(index) / Double(count))
                 points.append((coordinate.latitude, coordinate.longitude))
             }
+            if points.count >= maximumPoints { break }
         }
+
         if let last = route.waypoints.last {
             points.append((last.latitude, last.longitude))
         }

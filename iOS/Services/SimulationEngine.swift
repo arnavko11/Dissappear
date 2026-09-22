@@ -25,8 +25,8 @@ final class SimulationEngine {
     private var legLengths: [CLLocationDistance] = []
 
     var progress: Double {
-        guard let route, route.totalDistance > 0 else { return 0 }
-        return min(1, travelled / route.totalDistance)
+        guard let route, route.totalDistance > 0, travelled.isFinite else { return 0 }
+        return min(1, max(0, travelled / route.totalDistance))
     }
 
     var remainingDistance: CLLocationDistance {
@@ -144,6 +144,9 @@ final class SimulationEngine {
 
     private func advance(by delta: TimeInterval) {
         guard let route, phase == .running else { return }
+        // A clock that jumped, or a speed set to something silly, would
+        // otherwise poison travelled and take the progress bar with it.
+        guard delta.isFinite, delta >= 0, speedMultiplier.isFinite else { return }
         elapsed += delta
         travelled += route.baseSpeed * speedMultiplier * delta
 
