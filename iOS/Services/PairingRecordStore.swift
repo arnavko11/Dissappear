@@ -41,8 +41,9 @@ final class PairingRecordStore {
 
         let data = try Data(contentsOf: source)
         guard data.count > 32, data.count < 1_000_000 else {
-            throw CocoaError(.fileReadCorruptFile)
+            throw ImportFailure.notARecord
         }
+        try Self.validate(data)
 
         let destination = Self.url
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
@@ -62,6 +63,45 @@ final class PairingRecordStore {
     /// Called when the record changes, so anything holding a connection made
     /// with the old one can let it go.
     var onRecordChanged: (() -> Void)?
+
+    /// What a record has to contain before it is worth keeping.
+    ///
+    /// These are the keys idevice insists on. Checking them here turns a
+    /// malformed export into a message at import, rather than a broken pipe
+    /// three steps later when the device hangs up on the session.
+    enum ImportFailure: LocalizedError {
+        case notARecord
+        case missingKeys([String])
+        case noEscrowBag
+
+        var errorDescription: String? {
+            switch self {
+            case .notARecord:
+                return "That file is not a pairing record."
+            case let .missingKeys(keys):
+                return "That pairing record is missing \(keys.joined(separator: ", ")). Export a fresh one from the Mac companion under Devices."
+            case .noEscrowBag:
+                return "That pairing record has no escrow bag, so the iPhone will refuse it whenever the screen is locked. Export a fresh one with the phone unlocked and trusting the Mac."
+            }
+        }
+    }
+
+    private static func validate(_ data: Data) throws {
+        guard let plist = try? PropertyListSerialization
+            .propertyList(from: data, format: nil) as? [String: Any] else {
+            throw ImportFailure.notARecord
+        }
+
+        let required = ["DeviceCertificate", "HostPrivateKey", "HostCertificate",
+                        "RootPrivateKey", "RootCertificate",
+                        "SystemBUID", "HostID", "WiFiMACAddress"]
+        let missing = required.filter { plist[$0] == nil }
+        guard missing.isEmpty else { throw ImportFailure.missingKeys(missing) }
+
+        // Optional to idevice, but without it the device refuses a session
+        // while locked — which is most of the time, and reads as a mystery.
+        guard plist["EscrowBag"] != nil else { throw ImportFailure.noEscrowBag }
+    }
 
     func removeRecord() {
         try? FileManager.default.removeItem(at: Self.url)

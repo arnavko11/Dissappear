@@ -127,7 +127,9 @@ struct SettingsView: View {
             do {
                 try pairingRecords.importRecord(from: url)
             } catch {
-                importFailure = "That file could not be read as a pairing record."
+                // The store says exactly what is wrong with the file; replacing
+                // that with a generic line would throw the answer away.
+                importFailure = error.localizedDescription
             }
         }
         .alert("Import Failed", isPresented: Binding(
