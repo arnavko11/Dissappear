@@ -14,7 +14,6 @@ struct PersistenceService {
 
     func seedIfNeeded(defaults: UserDefaults = .standard) {
         guard !defaults.bool(forKey: PreferenceKey.didSeedLibrary) else { return }
-        defaults.set(true, forKey: PreferenceKey.didSeedLibrary)
 
         guard let url = Bundle.main.url(forResource: SimulationLibrary.resourceName, withExtension: "json"),
               let data = try? Data(contentsOf: url),
@@ -47,6 +46,13 @@ struct PersistenceService {
             context.insert(TestScenario(name: scenario.name, notes: scenario.summary, route: route))
         }
 
-        try? save()
+        // Marked only once the work is done: it used to be set first, so a
+        // seed that failed left the library permanently empty with no retry.
+        do {
+            try save()
+            defaults.set(true, forKey: PreferenceKey.didSeedLibrary)
+        } catch {
+            context.rollback()
+        }
     }
 }

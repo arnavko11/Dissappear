@@ -10,7 +10,10 @@ import Observation
 @Observable
 final class RemoteDiscovery {
     struct Companion: Identifiable, Equatable {
-        var id: String { name }
+        /// The endpoint, not the name: two Macs can share a name, and keying
+        /// on it made them collapse into one row that pointed at whichever
+        /// arrived last.
+        var id: String { "\(name)|\(endpoint)" }
         var name: String
         var endpoint: NWEndpoint
     }

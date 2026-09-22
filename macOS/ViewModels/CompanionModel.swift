@@ -1067,11 +1067,19 @@ extension CompanionModel {
             }
             let points = Self.densify(route: route)
             let gpx = try GPXWriter.write(coordinates: points, name: route.name)
-            deviceLink = try await locationSimulation.playRoute(gpxURL: gpx, device: device, tool: tool, link: deviceLink) { [weak self] line in
+            let outcome = try await locationSimulation.playRoute(gpxURL: gpx, device: device,
+                                                                 tool: tool, link: deviceLink) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }
+            locationSession = outcome.0
+            deviceLink = outcome.1
             deviceLocationName = route.name
             deviceLocation = points.last.map { SimulatedCoordinate(latitude: $0.latitude, longitude: $0.longitude) }
+            sessionLostReason = nil
+            isDeviceDetached = false
+            monitorLocationSession()
+            wakeAssertion.acquire(reason: WakeAssertion.Reason.locationSession)
+            isKeepingAwake = wakeAssertion.isActive
         } catch let failure as CompanionError {
             error = failure
         } catch {

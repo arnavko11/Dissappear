@@ -605,25 +605,28 @@ struct LocationSimulationService {
                                  onOutputLine: onOutputLine)
     }
 
-    @discardableResult
+    /// Replays a track. Like `set`, the tool holds the session open for the
+    /// duration, so the handle comes back and has to be kept: without it the
+    /// process runs on unreachable and the route cannot be stopped.
     func playRoute(gpxURL: URL,
                    device: Device,
                    tool: Tool,
                    link: Link?,
-                   onOutputLine: @escaping @Sendable (String) -> Void) async throws -> Link? {
+                   onOutputLine: @escaping @Sendable (String) -> Void) async throws -> (Session, Link?) {
         if tool.version == "devicectl" {
             try await runDeviceCtlLocation(["play", gpxURL.path], device: device, tool: tool,
                                            stage: "Playing the route on the device",
                                            onOutputLine: onOutputLine)
-            return link
+            return (Session(handle: nil), link)
         }
-        return try await attemptHeld(["developer", "dvt", "simulate-location", "play"],
-                                     positional: [gpxURL.path],
-                                     device: device,
-                                     tool: tool,
-                                     link: link,
-                                     stage: "Playing the route on the device",
-                                     onOutputLine: onOutputLine).link
+        let outcome = try await attemptHeld(["developer", "dvt", "simulate-location", "play"],
+                                            positional: [gpxURL.path],
+                                            device: device,
+                                            tool: tool,
+                                            link: link,
+                                            stage: "Playing the route on the device",
+                                            onOutputLine: onOutputLine)
+        return (Session(handle: outcome.handle), outcome.link)
     }
 
     /// devicectl's location verbs, tried in the shapes Apple's CLI uses
