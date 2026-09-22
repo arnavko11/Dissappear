@@ -702,12 +702,23 @@ struct LocationSimulationService {
 
 /// Writes a route as GPX so the developer service can replay it.
 enum GPXWriter {
+    /// A route's name is whatever the user typed, and it goes into XML. An
+    /// ampersand or an angle bracket in it produced a file the tool could not
+    /// parse, so a route called "Tom & Jerry" simply failed to play.
+    private static func escaped(_ value: String) -> String {
+        value.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
+    }
+
     static func write(coordinates: [(latitude: Double, longitude: Double)], name: String) throws -> URL {
         var gpx = """
         <?xml version="1.0" encoding="UTF-8"?>
         <gpx version="1.1" creator="Dissappear Companion" xmlns="http://www.topografix.com/GPX/1/1">
           <trk>
-            <name>\(name)</name>
+            <name>\(escaped(name))</name>
             <trkseg>
 
         """

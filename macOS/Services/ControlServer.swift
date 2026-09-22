@@ -147,7 +147,11 @@ final class ControlServer: @unchecked Sendable {
         let listener = try NWListener(using: parameters, on: endpoint)
 
         // Announce over Bonjour so the phone can find this Mac by itself.
-        listener.service = NWListener.Service(name: Host.current().localizedName ?? "Dissappear Companion",
+        // Bonjour instance names are limited to 63 bytes; a long computer
+        // name would have been rejected outright, taking discovery with it.
+        let advertised = (Host.current().localizedName ?? "Dissappear Companion")
+            .replacingOccurrences(of: ".", with: " ")
+        listener.service = NWListener.Service(name: String(advertised.prefix(60)),
                                               type: Self.serviceType)
 
         listener.newConnectionHandler = { [weak self] connection in
