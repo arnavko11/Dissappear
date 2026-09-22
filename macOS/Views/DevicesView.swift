@@ -122,11 +122,22 @@ struct DeviceDetailView: View {
                                 }
                                 .disabled(model.isBusy)
 
+                                // The privileged tunnel is the last resort
+                                // when the password-free routes are all
+                                // refused, and nothing tries it unless it is
+                                // already running — so there has to be a way
+                                // to start it.
                                 if model.isDeveloperTunnelRunning {
                                     Button("Stop Tunnel") {
                                         Task { await model.stopDeveloperTunnel() }
                                     }
                                     .disabled(model.isBusy)
+                                } else {
+                                    Button("Start Developer Tunnel…") {
+                                        Task { await model.startDeveloperTunnel() }
+                                    }
+                                    .disabled(model.isBusy)
+                                    .help("Only needed if spoofing is refused every other way. Asks for an administrator password.")
                                 }
 
                                 if model.deviceLocation != nil {
