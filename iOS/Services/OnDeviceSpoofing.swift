@@ -23,6 +23,7 @@ final class OnDeviceSpoofing {
     enum Failure: LocalizedError {
         case noPairingRecord
         case noLoopback(String)
+        case recordRejected(String)
         case unreachable(String)
         case tool(String)
 
@@ -30,6 +31,22 @@ final class OnDeviceSpoofing {
             switch self {
             case .noPairingRecord:
                 return "No pairing record has been imported. Export one from the Mac companion under Devices, then import it here."
+            case let .recordRejected(detail):
+                return """
+                The iPhone accepted the connection and then closed it, which \
+                means it would not open a session with this pairing record.
+
+                Usually one of three things:
+
+                1. The phone is locked. Unlock it and try again.
+                2. The record has expired. They lapse on their own, and on any \
+                iOS update or reset — export a fresh one from the Mac \
+                companion under Devices and import it again.
+                3. The Mac that produced the record is no longer trusted by \
+                the phone. Reconnect the cable, tap Trust, then export again.
+
+                \(detail)
+                """
             case let .noLoopback(address):
                 return "Nothing is answering at \(address). Install StosVPN or LocalDevVPN — separate apps, not part of this one — and switch the VPN on. iOS will not let this app reach its own device's services without one."
             case let .unreachable(message):
@@ -265,11 +282,22 @@ final class OnDeviceSpoofing {
         let code = error.pointee.code
         idevice_error_free(error)
 
-        // A refused connection here is almost always the loopback VPN being
-        // off, rather than anything wrong with the device or the request.
-        if context.contains("Connecting") {
-            throw Failure.unreachable("\(context) failed: \(message) (\(code))")
+        let detail = "\(context) failed: \(message) (\(code))"
+        let lower = message.lowercased()
+
+        // A broken pipe means the device accepted the connection and then hung
+        // up, which is lockdownd refusing the session rather than anything
+        // wrong with the network — so saying "could not reach" would send the
+        // user looking in the wrong place entirely.
+        if lower.contains("broken pipe") || lower.contains("os code 32")
+            || lower.contains("connection reset") || lower.contains("eof") {
+            throw Failure.recordRejected(detail)
         }
-        throw Failure.tool("\(context) failed: \(message) (\(code))")
+
+        // A refused connection is almost always the loopback VPN being off.
+        if context.contains("Connecting") {
+            throw Failure.unreachable(detail)
+        }
+        throw Failure.tool(detail)
     }
 }
