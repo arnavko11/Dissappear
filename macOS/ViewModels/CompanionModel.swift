@@ -1220,6 +1220,18 @@ extension CompanionModel {
         }
     }
 
+    /// Ends everything held before the app goes away.
+    ///
+    /// Terminating the spoofing session is what puts the real location back,
+    /// so quitting without it leaves the phone reporting a lie that nothing
+    /// can now correct.
+    func shutDown() async {
+        controlServer.stop()
+        await ProcessRunner.shared.stopAll()
+        wakeAssertion.release(reason: WakeAssertion.Reason.locationSession)
+        wakeAssertion.release(reason: WakeAssertion.Reason.remoteControl)
+    }
+
     /// Invalidates the code a phone was paired with.
     func regeneratePairingCode() {
         controlServer.rotatePairingCode()

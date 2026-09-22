@@ -175,6 +175,18 @@ actor ProcessRunner {
         if process.isRunning { process.terminate() }
     }
 
+    /// Ends every held process.
+    ///
+    /// A child outlives the app that started it, so quitting with a spoofing
+    /// session open left the phone spoofed with nothing able to stop it — the
+    /// next launch does not know the handle.
+    func stopAll() {
+        for (_, process) in longRunning where process.isRunning {
+            process.terminate()
+        }
+        longRunning.removeAll()
+    }
+
     /// Convenience for tools resolved through `xcrun`.
     @discardableResult
     func xcrun(_ arguments: [String],
