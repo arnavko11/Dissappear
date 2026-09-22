@@ -997,13 +997,9 @@ extension CompanionModel {
                 technicalDetails: "device = \(selectedDevice?.name ?? "nil"), tool = \(locationTooling.tool?.executablePath ?? "nil")")
             return
         }
-        guard !isBusy else {
-            error = CompanionError(title: "Busy",
-                                   details: "Another operation is still running: \(activity ?? "please wait").",
-                                   recommendedAction: "Wait for it to finish, then try again.",
-                                   technicalDetails: "isBusy = true")
-            return
-        }
+        // Deliberately not gated on isBusy. Putting the real location back is
+        // the way out of a wedged state, so it must not be the thing that
+        // refuses because the state is wedged.
         isBusy = true
         activity = "Restoring real location on \(device.name)"
         defer { isBusy = false; activity = nil }
@@ -1012,8 +1008,12 @@ extension CompanionModel {
             locationSessionMonitor?.cancel()
             locationSessionMonitor = nil
             sessionLostReason = nil
+            // Ending the held process is what actually stops the spoof: the
+            // tool clears the location as it shuts its session down. The
+            // explicit clear afterwards covers a session that already died.
             if let handle = locationSession?.handle {
                 await locationSimulation.endSession(handle)
+                appendLog("Stopped the held spoofing session")
             }
             locationSession = nil
             deviceLink = try await locationSimulation.clearLocation(device: device, tool: tool, link: deviceLink) { [weak self] line in

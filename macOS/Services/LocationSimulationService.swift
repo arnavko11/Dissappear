@@ -234,20 +234,105 @@ struct LocationSimulationService {
             return (Session(handle: nil), link)
         }
 
-        let resolved = try await attempt(["developer", "dvt", "simulate-location", "set"],
-                                         positional: coordinates,
-                                         device: device,
-                                         tool: tool,
-                                         link: link,
-                                         stage: "Spoofing the device location",
-                                         onOutputLine: onOutputLine)
-        return (Session(handle: nil), resolved)
+        let outcome = try await attemptHeld(["developer", "dvt", "simulate-location", "set"],
+                                            positional: coordinates,
+                                            device: device,
+                                            tool: tool,
+                                            link: link,
+                                            stage: "Spoofing the device location",
+                                            onOutputLine: onOutputLine)
+        return (Session(handle: outcome.handle), outcome.link)
     }
 
-    /// Runs a command, trying each way of reaching the device until one works.
+    /// Runs a command that holds its session open, trying each way of reaching
+    /// the device until one sticks.
     ///
-    /// The winning link is returned so the next call starts with it: the
-    /// search is for the first command against a device, not for every one.
+    /// `simulate-location set` and `play` do not exit: after applying the
+    /// location they block on a signal, and the spoof lasts exactly as long as
+    /// that process does. Waiting for them to finish hangs forever, so they
+    /// are started and left running, and success is judged by the process
+    /// still being alive a moment later.
+    private func attemptHeld(_ verb: [String],
+                             positional: [String] = [],
+                             device: Device,
+                             tool: Tool,
+                             link: Link?,
+                             stage: String,
+                             onOutputLine: @escaping @Sendable (String) -> Void)
+    async throws -> (handle: UUID?, link: Link?) {
+        var failures: [(Link, String)] = []
+
+        for candidate in Link.candidates(preferring: link) {
+            if candidate.needsAdministrator, !(await isTunnelRunning()) { continue }
+
+            var arguments = verb + candidate.arguments(udid: device.udid)
+            if !positional.isEmpty { arguments += ["--"] + positional }
+
+            let collected = OutputLog()
+            let handle = try await runner.start(tool.executablePath, arguments) { line in
+                collected.append(line)
+                onOutputLine(line)
+            }
+
+            // Long enough for a refusal to surface, short enough not to feel
+            // like a hang if every transport is going to fail.
+            try? await Task.sleep(for: .seconds(3))
+
+            if await runner.isRunning(handle) {
+                return (handle, candidate)     // still up: the session is held
+            }
+
+            let status = await runner.exitStatus(handle) ?? 0
+            await runner.stop(handle)
+            if status == 0 {
+                return (nil, candidate)        // exited cleanly: nothing to hold
+            }
+            failures.append((candidate, collected.text))
+        }
+
+        throw Self.heldFailure(stage: stage, failures: failures)
+    }
+
+    private static func heldFailure(stage: String, failures: [(Link, String)]) -> CompanionError {
+        guard let last = failures.last else {
+            return CompanionError(
+                title: "\(stage) failed",
+                details: "No way of reaching the device was available.",
+                recommendedAction: "Connect the iPhone by cable, unlock it, and make sure Developer Mode is on.",
+                technicalDetails: "no transports attempted")
+        }
+
+        var error = Self.error(stage: stage,
+                               result: ProcessResult(command: last.0.label,
+                                                     exitCode: 1,
+                                                     standardOutput: last.1,
+                                                     standardError: ""))
+        error.technicalDetails = failures
+            .map { "— \($0.0.label)\n\($0.1)" }
+            .joined(separator: "\n\n")
+        return error
+    }
+
+    /// Collects a held process's output, which arrives on its own queue.
+    private final class OutputLog: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lines: [String] = []
+
+        func append(_ line: String) {
+            lock.lock(); defer { lock.unlock() }
+            lines.append(line)
+        }
+
+        var text: String {
+            lock.lock(); defer { lock.unlock() }
+            return lines.joined(separator: "\n")
+        }
+    }
+
+    /// Runs a command that exits, trying each way of reaching the device
+    /// until one works. The winning link is returned so the next call starts
+    /// with it: the search is for the first command, not every one.
+    ///
     /// `verb` is the subcommand, `positional` anything that follows the `--`
     /// separator. They are kept apart because everything after `--` is taken
     /// as a positional argument: appending the device options there made the
@@ -532,13 +617,13 @@ struct LocationSimulationService {
                                            onOutputLine: onOutputLine)
             return link
         }
-        return try await attempt(["developer", "dvt", "simulate-location", "play"],
-                                 positional: [gpxURL.path],
-                                 device: device,
-                                 tool: tool,
-                                 link: link,
-                                 stage: "Playing the route on the device",
-                                 onOutputLine: onOutputLine)
+        return try await attemptHeld(["developer", "dvt", "simulate-location", "play"],
+                                     positional: [gpxURL.path],
+                                     device: device,
+                                     tool: tool,
+                                     link: link,
+                                     stage: "Playing the route on the device",
+                                     onOutputLine: onOutputLine).link
     }
 
     /// devicectl's location verbs, tried in the shapes Apple's CLI uses
