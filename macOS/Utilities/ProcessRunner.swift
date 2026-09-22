@@ -63,6 +63,10 @@ actor ProcessRunner {
     /// one is noticed.
     static let deviceTimeout: Duration = .seconds(90)
 
+    /// For compiling. A clean build of a cold project on a slow machine is
+    /// measured in tens of minutes, and killing one part-way wastes all of it.
+    static let buildTimeout: Duration = .seconds(2_400)
+
     @discardableResult
     func run(_ executable: String,
              _ arguments: [String],
