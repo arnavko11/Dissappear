@@ -929,7 +929,10 @@ extension CompanionModel {
 
         locationSessionMonitor = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(4))
+                // Each presence check runs devicectl, so this is deliberately
+                // not frequent: it is watching for a cable being pulled, not
+                // timing anything.
+                try? await Task.sleep(for: .seconds(8))
                 guard let self, !Task.isCancelled, self.deviceLocation != nil else { return }
 
                 // A held process that exited means the spoof really is over.

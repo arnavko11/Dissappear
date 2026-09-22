@@ -55,8 +55,15 @@ final class SpoofingCoordinator {
     }
 
     var route: Route {
-        if pairingRecords.hasRecord { return .onDevice }
+        // On device only when it can actually work. A pairing record with no
+        // loopback VPN running used to win anyway, which quietly switched off
+        // a Mac that was sitting there working.
+        if pairingRecords.hasRecord, isLoopbackReachable { return .onDevice }
         if client.canSpoof { return .companion }
+
+        if pairingRecords.hasRecord, !isLoopbackReachable {
+            return .unavailable("A pairing record is imported, but nothing is answering at \(loopbackAddress). Switch on StosVPN or LocalDevVPN, or connect the Mac companion.")
+        }
         return .unavailable(client.unavailableReason
             ?? "Import a pairing record, or pair the Mac companion.")
     }
@@ -161,8 +168,23 @@ final class SpoofingCoordinator {
     /// Checks the loopback VPN, so Settings can show its state rather than
     /// leaving it to be discovered by a failed spoof.
     func refreshLoopback() async {
-        guard pairingRecords.hasRecord else { return }
+        guard pairingRecords.hasRecord else {
+            isLoopbackReachable = false
+            return
+        }
         isLoopbackReachable = await onDevice().isLoopbackReachable()
+        lastLoopbackCheck = .now
+    }
+
+    private var lastLoopbackCheck: Date?
+
+    /// Re-checks the VPN when the last look is old enough to be worth
+    /// repeating. Another app owns it and can switch it off at any time, but
+    /// the check costs a connection attempt, so it is not done per call.
+    func refreshLoopbackIfStale(after interval: TimeInterval = 10) async {
+        guard pairingRecords.hasRecord else { return }
+        if let lastLoopbackCheck, Date.now.timeIntervalSince(lastLoopbackCheck) < interval { return }
+        await refreshLoopback()
     }
 
     private func onDevice() -> OnDeviceSpoofing {

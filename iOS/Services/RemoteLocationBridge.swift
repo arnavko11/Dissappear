@@ -22,6 +22,10 @@ final class RemoteLocationBridge {
             try? await Task.sleep(for: Self.interval)
             guard !Task.isCancelled else { return }
 
+            // Another app owns the loopback VPN and can switch it off, which
+            // changes which way a location has to be sent.
+            await spoofing.refreshLoopbackIfStale()
+
             // The companion replays a whole route by itself; pushing points
             // over the top of that would fight it.
             guard engine.phase == .running,
