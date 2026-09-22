@@ -23,6 +23,10 @@ struct SettingsView: View {
                 }
 
                 if pairingRecords.hasRecord {
+                    LabeledContent("Loopback VPN") {
+                        Text(spoofing.isLoopbackReachable ? "Connected" : "Not reachable")
+                            .foregroundStyle(spoofing.isLoopbackReachable ? .secondary : Color.orange)
+                    }
                     LabeledContent("Loopback Address") {
                         TextField("10.7.0.1", text: loopbackBinding)
                             .multilineTextAlignment(.trailing)
@@ -110,6 +114,13 @@ struct SettingsView: View {
             AboutSection()
         }
         .navigationTitle("Settings")
+        .task {
+            // The VPN is another app, and can be switched off at any time.
+            while !Task.isCancelled {
+                await spoofing.refreshLoopback()
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
         .fileImporter(isPresented: $isImportingRecord,
                       allowedContentTypes: [.propertyList, .xml, .data]) { result in
             guard case let .success(url) = result else { return }

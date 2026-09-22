@@ -49,11 +49,20 @@ actor ProcessRunner {
         }
     }
 
+    /// Longest any single command may take before it is killed.
+    ///
+    /// Some of these tools never exit on their own — the developer location
+    /// service holds its session open until it is signalled — and one of them
+    /// reached `run` by mistake, which hung the app with no way back. A
+    /// command that runs this long has gone wrong whatever it is.
+    static let defaultTimeout: Duration = .seconds(90)
+
     @discardableResult
     func run(_ executable: String,
              _ arguments: [String],
              currentDirectory: URL? = nil,
              environment: [String: String]? = nil,
+             timeout: Duration = ProcessRunner.defaultTimeout,
              onOutputLine: (@Sendable (String) -> Void)? = nil) async throws -> ProcessResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -102,6 +111,16 @@ actor ProcessRunner {
                                                              exitCode: finished.terminationStatus,
                                                              standardOutput: outBuffer.text,
                                                              standardError: errBuffer.text))
+            }
+
+            // Kills a command that outlives the timeout. Terminating it makes
+            // the termination handler fire, so the continuation resumes there
+            // exactly once, as it would for any other exit.
+            Task.detached {
+                try? await Task.sleep(for: timeout)
+                if process.isRunning { process.terminate() }
+                try? await Task.sleep(for: .seconds(2))
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
             }
 
             do {

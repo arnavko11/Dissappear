@@ -27,6 +27,8 @@ final class SpoofingCoordinator {
     /// Set when the last on-device attempt failed, so the UI can say why
     /// rather than silently falling back and looking like it did nothing.
     private(set) var lastOnDeviceFailure: String?
+    /// Whether the loopback VPN is answering, refreshed when Settings is open.
+    private(set) var isLoopbackReachable = false
 
     var loopbackAddress: String {
         didSet { UserDefaults.standard.set(loopbackAddress, forKey: "loopbackAddress") }
@@ -99,6 +101,13 @@ final class SpoofingCoordinator {
         case .unavailable:
             break
         }
+    }
+
+    /// Checks the loopback VPN, so Settings can show its state rather than
+    /// leaving it to be discovered by a failed spoof.
+    func refreshLoopback() async {
+        guard pairingRecords.hasRecord else { return }
+        isLoopbackReachable = await onDevice().isLoopbackReachable()
     }
 
     private func onDevice() -> OnDeviceSpoofing {
