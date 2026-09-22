@@ -42,7 +42,13 @@ struct SettingsView: View {
             } header: {
                 Text("On This iPhone")
             } footer: {
-                Text("With a pairing record imported, this phone drives its own developer services and no Mac has to be nearby — which is what makes spoofing work away from home. Export the record from the Mac companion under Devices. It also needs a loopback VPN running (StosVPN or LocalDevVPN), because iOS will not let an app reach its own device services directly. Keep the record private: anything holding it can reach this device's developer services.")
+                Text("""
+                Two things are needed, and this app ships neither — they are                 separate on purpose.
+
+                1. A pairing record, exported from the Mac companion under                 Devices. It is the trust iOS established with that Mac, and                 cannot be forged. Keep it private: anything holding it can                 reach this device's developer services.
+
+                2. A loopback VPN — StosVPN or LocalDevVPN, installed from                 the App Store or sideloaded, and switched on. This app will                 never ask you to add a VPN configuration, because the VPN is                 not part of it. iOS forbids an app from reaching its own                 device's services directly, so one of those apps has to                 publish a local address that routes back here.
+                """)
             }
 
             Section("General") {

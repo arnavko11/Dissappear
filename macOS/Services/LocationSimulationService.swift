@@ -234,7 +234,8 @@ struct LocationSimulationService {
             return (Session(handle: nil), link)
         }
 
-        let resolved = try await attempt(["developer", "dvt", "simulate-location", "set", "--"] + coordinates,
+        let resolved = try await attempt(["developer", "dvt", "simulate-location", "set"],
+                                         positional: coordinates,
                                          device: device,
                                          tool: tool,
                                          link: link,
@@ -247,8 +248,13 @@ struct LocationSimulationService {
     ///
     /// The winning link is returned so the next call starts with it: the
     /// search is for the first command against a device, not for every one.
+    /// `verb` is the subcommand, `positional` anything that follows the `--`
+    /// separator. They are kept apart because everything after `--` is taken
+    /// as a positional argument: appending the device options there made the
+    /// tool reject them as extra coordinates.
     @discardableResult
-    private func attempt(_ command: [String],
+    private func attempt(_ verb: [String],
+                         positional: [String] = [],
                          device: Device,
                          tool: Tool,
                          link: Link?,
@@ -262,8 +268,10 @@ struct LocationSimulationService {
             // only used once it is already running.
             if candidate.needsAdministrator, !(await isTunnelRunning()) { continue }
 
-            let result = try await runner.run(tool.executablePath,
-                                              command + candidate.arguments(udid: device.udid),
+            var arguments = verb + candidate.arguments(udid: device.udid)
+            if !positional.isEmpty { arguments += ["--"] + positional }
+
+            let result = try await runner.run(tool.executablePath, arguments,
                                               onOutputLine: onOutputLine)
             if result.succeeded || acceptable(result.combinedOutput) {
                 return candidate
@@ -276,7 +284,7 @@ struct LocationSimulationService {
                 title: "\(stage) failed",
                 details: "No way of reaching the device was available.",
                 recommendedAction: "Connect the iPhone by cable, unlock it, and make sure Developer Mode is on.",
-                technicalDetails: command.joined(separator: " "))
+                technicalDetails: verb.joined(separator: " "))
         }
 
         var error = Self.error(stage: stage, result: last)
@@ -524,7 +532,8 @@ struct LocationSimulationService {
                                            onOutputLine: onOutputLine)
             return link
         }
-        return try await attempt(["developer", "dvt", "simulate-location", "play", gpxURL.path],
+        return try await attempt(["developer", "dvt", "simulate-location", "play"],
+                                 positional: [gpxURL.path],
                                  device: device,
                                  tool: tool,
                                  link: link,
