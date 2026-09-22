@@ -51,11 +51,21 @@ actor ProcessRunner {
 
     /// Longest any single command may take before it is killed.
     ///
-    /// Some of these tools never exit on their own — the developer location
-    /// service holds its session open until it is signalled — and one of them
-    /// reached `run` by mistake, which hung the app with no way back. A
-    /// command that runs this long has gone wrong whatever it is.
-    static let defaultTimeout: Duration = .seconds(90)
+    /// This exists to stop a tool that never exits from hanging the app for
+    /// good, not to hold anything to a schedule: a build, an app install and
+    /// the first tooling download all legitimately run for minutes, and
+    /// killing one of those is worse than waiting. Calls that should be quick
+    /// pass a shorter value of their own.
+    static let defaultTimeout: Duration = .seconds(600)
+
+    /// For commands that talk to an attached device and should answer
+    /// promptly. Long enough for a slow handshake, short enough that a wedged
+    /// one is noticed.
+    static let deviceTimeout: Duration = .seconds(90)
+
+    /// For compiling. A clean build of a cold project on a slow machine is
+    /// measured in tens of minutes, and killing one part-way wastes all of it.
+    static let buildTimeout: Duration = .seconds(2_400)
 
     @discardableResult
     func run(_ executable: String,

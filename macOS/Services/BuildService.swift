@@ -95,7 +95,9 @@ struct BuildService {
         }
         arguments.append("build")
 
-        let result = try await runner.run("/usr/bin/xcodebuild", arguments, onOutputLine: onOutputLine)
+        let result = try await runner.run("/usr/bin/xcodebuild", arguments,
+                                          timeout: ProcessRunner.buildTimeout,
+                                          onOutputLine: onOutputLine)
         guard result.succeeded else {
             throw CompanionError.fromToolOutput(stage: "Build", result: result)
         }
@@ -119,7 +121,8 @@ struct BuildService {
                                            "-scheme", configuration.scheme,
                                            "-configuration", configuration.configuration,
                                            "-derivedDataPath", configuration.derivedDataPath,
-                                           "clean"])
+                                           "clean"],
+                                          timeout: ProcessRunner.buildTimeout)
         guard result.succeeded else {
             throw CompanionError.fromToolOutput(stage: "Clean", result: result)
         }
