@@ -357,6 +357,7 @@ struct LocationSimulationService {
             if !positional.isEmpty { arguments += ["--"] + positional }
 
             let result = try await runner.run(tool.executablePath, arguments,
+                                              timeout: ProcessRunner.deviceTimeout,
                                               onOutputLine: onOutputLine)
             if result.succeeded || acceptable(result.combinedOutput) {
                 return candidate

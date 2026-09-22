@@ -7,6 +7,10 @@ struct InstallationService {
     private let runner = ProcessRunner.shared
 
     /// Wraps a signed .app as an .ipa for the tools that expect one.
+    ///
+    /// The caller owns the returned file's directory and should remove it;
+    /// `cleanUp` does that. Each package is a full copy of the app, so left
+    /// alone they pile up in the temporary directory.
     func package(appURL: URL) async throws -> URL {
         let staging = FileManager.default.temporaryDirectory
             .appendingPathComponent("DissappearPackage-\(UUID().uuidString)", isDirectory: true)
@@ -27,6 +31,13 @@ struct InstallationService {
         return try await package(appURL: appURL)
     }
 
+    /// Removes a staging directory made by `package`.
+    func cleanUp(package ipaURL: URL) {
+        let staging = ipaURL.deletingLastPathComponent()
+        guard staging.lastPathComponent.hasPrefix("DissappearPackage-") else { return }
+        try? FileManager.default.removeItem(at: staging)
+    }
+
     func install(appURL: URL,
                  ipaURL: URL?,
                  on device: Device,
@@ -40,11 +51,13 @@ struct InstallationService {
                                           onOutputLine: onOutputLine)
         case .cfgutil:
             let ipa = try await resolvedArchive(ipaURL, appURL: appURL)
+            defer { if ipaURL == nil { cleanUp(package: ipa) } }
             result = try await runner.run(tool.executablePath,
                                           ["install-app", ipa.path],
                                           onOutputLine: onOutputLine)
         case .ideviceinstaller:
             let ipa = try await resolvedArchive(ipaURL, appURL: appURL)
+            defer { if ipaURL == nil { cleanUp(package: ipa) } }
             result = try await runner.run(tool.executablePath,
                                           ["-u", device.udid, "-i", ipa.path],
                                           onOutputLine: onOutputLine)
