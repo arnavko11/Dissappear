@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 /// Spoofs this phone's location from the phone itself, with no computer.
 ///
@@ -21,6 +22,7 @@ import Foundation
 final class OnDeviceSpoofing {
     enum Failure: LocalizedError {
         case noPairingRecord
+        case noLoopback(String)
         case unreachable(String)
         case tool(String)
 
@@ -28,6 +30,8 @@ final class OnDeviceSpoofing {
             switch self {
             case .noPairingRecord:
                 return "No pairing record has been imported. Export one from the Mac companion under Devices, then import it here."
+            case let .noLoopback(address):
+                return "Nothing is answering at \(address). Install StosVPN or LocalDevVPN — separate apps, not part of this one — and switch the VPN on. iOS will not let this app reach its own device's services without one."
             case let .unreachable(message):
                 return "Could not reach this device's own services. Check that StosVPN (or LocalDevVPN) is connected. \(message)"
             case let .tool(message):
@@ -41,12 +45,50 @@ final class OnDeviceSpoofing {
     /// guess here should be one field to correct rather than a new build.
     static let defaultLoopbackAddress = "10.7.0.1"
 
+    /// lockdownd's port, which the loopback VPN routes back to this device.
+    static let lockdownPort: UInt16 = 62078
+
     private let pairingRecordURL: URL
     private let loopbackAddress: String
 
     init(pairingRecordURL: URL, loopbackAddress: String = OnDeviceSpoofing.defaultLoopbackAddress) {
         self.pairingRecordURL = pairingRecordURL
         self.loopbackAddress = loopbackAddress
+    }
+
+    /// Whether the loopback VPN is up and lockdownd is answering through it.
+    ///
+    /// Worth its own check: without it every failure below looks the same, and
+    /// the commonest cause by far is simply that the VPN is switched off.
+    func isLoopbackReachable() async -> Bool {
+        await withCheckedContinuation { continuation in
+            let connection = NWConnection(
+                host: NWEndpoint.Host(loopbackAddress),
+                port: NWEndpoint.Port(rawValue: Self.lockdownPort) ?? 62078,
+                using: .tcp)
+
+            let finished = OnceFlag()
+            let settle: @Sendable (Bool) -> Void = { reachable in
+                guard finished.claim() else { return }
+                connection.cancel()
+                continuation.resume(returning: reachable)
+            }
+
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready: settle(true)
+                case .failed, .cancelled: settle(false)
+                case .waiting: settle(false)
+                default: break
+                }
+            }
+            connection.start(queue: .global(qos: .userInitiated))
+
+            Task {
+                try? await Task.sleep(for: .seconds(3))
+                settle(false)
+            }
+        }
     }
 
     /// Sets the coordinate the whole device reports.
@@ -73,6 +115,9 @@ final class OnDeviceSpoofing {
     private func withSession(_ body: (OpaquePointer?) throws -> Void) async throws {
         guard FileManager.default.fileExists(atPath: pairingRecordURL.path) else {
             throw Failure.noPairingRecord
+        }
+        guard await isLoopbackReachable() else {
+            throw Failure.noLoopback(loopbackAddress)
         }
 
         // Ownership below follows idevice's C API, which moves some handles
@@ -138,7 +183,7 @@ final class OnDeviceSpoofing {
     private func withSocketAddress(_ body: (UnsafePointer<sockaddr>) throws -> Void) throws {
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = in_port_t(62078).bigEndian    // lockdownd
+        address.sin_port = Self.lockdownPort.bigEndian   // lockdownd
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
 
         guard inet_pton(AF_INET, loopbackAddress, &address.sin_addr) == 1 else {
@@ -147,6 +192,19 @@ final class OnDeviceSpoofing {
 
         try withUnsafePointer(to: &address) { pointer in
             try pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { try body($0) }
+        }
+    }
+
+    /// Guards a continuation so it can only be resumed once.
+    private final class OnceFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false
+
+        func claim() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            if done { return false }
+            done = true
+            return true
         }
     }
 
