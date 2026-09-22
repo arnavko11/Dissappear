@@ -20,9 +20,7 @@ struct PyMobileDevice3Installer {
     /// Where the private environment lives. Kept out of the app bundle so it
     /// survives updates and can be deleted by hand.
     static var environmentURL: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Dissappear/pymobiledevice3", isDirectory: true)
+        AppPaths.applicationSupport.appendingPathComponent("Dissappear/pymobiledevice3", isDirectory: true)
     }
 
     /// The executable this installer produces, whether or not it exists yet.

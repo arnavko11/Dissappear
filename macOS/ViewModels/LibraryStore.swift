@@ -9,8 +9,13 @@ final class LibraryStore: ObservableObject {
 
     private let url: URL
 
+    /// Application Support, or the home directory if the system will not name
+    /// it. Force-unwrapping that lookup crashed the app on launch for a
+    /// failure it could simply work around.
+    static var applicationSupport: URL { AppPaths.applicationSupport }
+
     init() {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let support = Self.applicationSupport
             .appendingPathComponent("DissappearCompanion", isDirectory: true)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         url = support.appendingPathComponent("SimulationLibrary.json")

@@ -10,7 +10,7 @@ struct BuildConfiguration: Equatable, Codable {
     static let iOSScheme = "Dissappear"
 
     static var `default`: BuildConfiguration {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let support = AppPaths.applicationSupport
             .appendingPathComponent("DissappearCompanion", isDirectory: true)
         return BuildConfiguration(projectPath: detectedProjectPath ?? "",
                                   scheme: iOSScheme,
