@@ -7,12 +7,12 @@ just this one. That is what it is for.
 It does this through Apple's own developer location service, the one behind
 Xcode's Simulate Location. That means it is visible to whoever holds the phone
 (Developer Mode has to be switched on by hand) and it is never hidden from
-them. Spoof phones you own.
+them. No jailbreak, nothing patched. Spoof phones you own.
 
 | Target | Platform | Role |
 | --- | --- | --- |
-| `Dissappear` | iOS 17+ | The phone app: pick places, walk routes, steer the Mac remotely |
-| `DissappearCompanion` | macOS 14+ | Does the spoofing. Sets up the tooling, holds the developer session, serves the controls to the phone |
+| `Dissappear` | iOS 17+ | The phone app: pick places, walk routes, and — with a pairing record — spoof this phone on its own |
+| `DissappearCompanion` | macOS 14+ | The Mac app: sets up the tooling, holds a spoofing session, serves the controls to the phone |
 
 Open `Dissappear.xcodeproj` in Xcode 26 or later. Before building the iOS app,
 run `Scripts/fetch-idevice.sh` once — it downloads the library the phone uses to
@@ -28,10 +28,48 @@ Either way the spoof is device-wide: every app on the phone sees it.
 | **On the phone itself** | A pairing record, and a loopback VPN | Anywhere, no computer present |
 | **Through the Mac companion** | The Mac to reach the phone over USB or the local network | Only while both are together |
 
-The phone's own route is preferred whenever a pairing record has been imported,
-because the Mac cannot follow you out of the door.
+The phone's own route is preferred whenever a pairing record is imported *and*
+the loopback VPN is answering. If the VPN is off, the app falls back to the Mac
+rather than pretending it can work.
 
-### Spoofing without a computer
+**A spoof lasts exactly as long as the session holding it.** The tool clears the
+location as it closes that session, so Stop Spoofing and quitting the companion
+both restore real GPS. Unplugging breaks the session rather than closing it,
+which can leave the phone stuck on the last coordinate — stop before you
+disconnect.
+
+## Getting started
+
+Install the macOS companion from the `.pkg` in the
+[latest release](../../releases/latest), open it, and follow **Setup**. It
+checks each thing the developer location service needs, in order, and fixes
+what it can by itself:
+
+1. **Xcode** — linked straight to its App Store page
+2. **pymobiledevice3** — installed automatically into a private folder the app owns, no password, nothing else on the Mac touched
+3. **An iPhone** — connected, unlocked, trusting this Mac
+4. **Developer Mode** — on the phone, under Settings ▸ Privacy & Security
+5. **A way in** — worked out on first use; see below
+6. **Pairing** — remote control is on by default; type its code into the phone app
+
+Then open **Locations**, pick anywhere, and the phone is there.
+
+### How the Mac reaches the phone
+
+Four routes are tried in turn, cheapest and least invasive first, and the one
+that works is remembered. A password is never asked for on a guess.
+
+| Route | Needs | Notes |
+| --- | --- | --- |
+| `--native` | macOS | Rides Apple's own tunnel through `remotepairingd`. No root, and `remoted` keeps running, so Xcode and `devicectl` still work |
+| `--userspace` | nothing | An iOS 17+ tunnel built in-process in pure Python. No root, just slower |
+| plain lockdown | nothing | All that iOS 16 and earlier need |
+| `tunneld` | an administrator password | Last resort. Installed as a launchd daemon, so it survives a restart. Start it from **Devices** |
+
+Each route can find the phone over Bonjour instead of USB, so turning on Wi-Fi
+sync in Finder keeps the Mac in touch without a cable.
+
+## Spoofing with no computer at all
 
 iOS only opens its developer services to something the device already trusts,
 and that trust is established by a computer — once. After that the phone can do
@@ -41,8 +79,9 @@ it alone, which is how this works away from home.
    the file private: anything holding it can reach that device's developer
    services.
 2. On the phone, install and connect a loopback VPN — [StosVPN] or
-   LocalDevVPN. iOS will not let an app reach its own device's services
-   directly, so one of these has to publish a local address that routes back.
+   LocalDevVPN. This app ships neither and will never ask you to add a VPN
+   configuration. iOS forbids an app from reaching its own device's services
+   directly, so one of those has to publish a local address that routes back.
 3. In Dissappear's Settings, **Import Pairing Record**. The **Spoofing Through**
    row should then read *This iPhone*.
 
@@ -51,220 +90,117 @@ thing to check — the default is StosVPN's.
 
 [StosVPN]: https://github.com/StephenDev0/StosVPN
 
-Through the companion instead, the spoof lasts exactly as long as the Mac
-holds the session: the tool it drives clears the location as it shuts down.
-So the Mac has to stay awake and the phone reachable, and stopping before you
-unplug is worth the habit — pulling the cable breaks the session rather than
-closing it, which can leave the phone stuck on the last coordinate until it is
-cleared or restarted. The companion holds off idle sleep while a session is
-live, and ends the session when it quits.
+> **Status:** the on-device path compiles and links but has never been run
+> against hardware. The transports, the loopback default and the whole FFI
+> chain are reasoned about, not observed.
 
-## Getting started
+## The iPhone app
 
-Install the macOS companion from the `.pkg` in the
-[latest release](../../releases/latest), open it, and follow **Setup**. It
-checks each thing the developer location service needs, in order, and fixes
-what it can by itself:
+A SwiftUI map workspace. Nothing in it can change a location without one of the
+two routes above: there is no in-app-only mode, because a position this app
+believed in privately would look like spoofing without being it.
 
-1. **Xcode** — linked straight to its App Store page, with the three steps after it
-2. **pymobiledevice3** — installed automatically into a private folder the app owns, no password, nothing else on the Mac touched
-3. **An iPhone** — connected, unlocked, trusting this Mac
-4. **Developer Mode** — on the phone, under Settings ▸ Privacy & Security
-5. **The developer tunnel** — iOS 17+ only, started behind the normal macOS password prompt
-6. **Pairing** — remote control is on by default; type its code into the phone app
+**Locations.** Search addresses and places with `MKLocalSearchCompleter`, enter
+a coordinate directly, or drop a pin (reverse geocoded for a readable name).
+Save favourites.
 
-Then open **Locations**, pick anywhere, and the phone is there.
+**Routes.** Add waypoints from the map or saved locations, reorder by dragging,
+move one by selecting it and tapping the map, reverse, clear, set base speed and
+looping. Drawn as a polyline with numbered waypoints.
+
+**Walking a route.** The engine interpolates along the route and acts as the
+clock. Through the companion the whole track is handed over and replayed in one
+session; on the phone's own route the points are streamed, which is affordable
+there because the connection is held open between them.
+
+**Scenarios.** A route paired with a speed, for a repeatable run.
+
+**Remote.** Finds companions over Bonjour, takes the pairing code, and reports
+what the Mac can see. Every request carries the code, and nothing but the
+location controls is exposed.
+
+Accessibility: Dynamic Type throughout, VoiceOver labels on the map, transport
+and rows, Reduce Motion respected, hardware-keyboard support for the transport.
 
 ## Getting the iPhone app onto a phone
 
-The companion offers three ways to install it. All three end
-in a build signed by Apple-issued credentials; none works around the
-development-signing lifetime. Only the Apple ID path needs an anisette server,
-and **Settings ▸ Find One For Me** picks a working one from the published list.
+Three ways, all ending in a build signed by Apple-issued credentials. None works
+around the development-signing lifetime.
 
 | Path | Needs | Good for |
 | --- | --- | --- |
-| **Build from source** | Xcode | Working on the iOS app itself |
-| **Bundled build + your own profile** | Command Line Tools, an install tool, a `.mobileprovision` | Installing without Xcode when you already have a profile |
+| **Build from source** | Xcode | Working on the app itself |
+| **Bundled build + your own profile** | Command Line Tools, an install tool, a `.mobileprovision` | Installing without Xcode when you have a profile |
 | **Bundled build + Apple ID** | Command Line Tools, an install tool | Installing with nothing but an Apple ID |
 
-```
-Connect iPhone → Developer Mode → Signing identity → Prepare → Build
-→ Code sign → Provision → Install → Launch
-```
+Only the Apple ID path needs an anisette server, and **Settings ▸ Find One For
+Me** picks a working one from the published list.
 
-Each stage is shown in **Build** with its own state, and every failure is
-translated into a title, a plain-language explanation, a recommended action and
-an expandable **Technical Details** section containing the exact command and its
-output.
-
-### Installing without Xcode
-
-Release builds of the companion embed the prebuilt iOS app, so there is no
-project to check out and no build step. The companion re-signs that build and
-installs it through whichever tool is present:
-
-| Tool | Provided by |
-| --- | --- |
-| `devicectl` | Xcode |
-| `cfgutil` | Apple Configurator ▸ Install Automation Tools |
-| `ideviceinstaller` | libimobiledevice (`brew install ideviceinstaller`) |
-
-Device discovery falls back to libimobiledevice when `devicectl` is missing, and
-the Devices screen distinguishes "no iPhone attached" from "attached but Xcode's
-tooling cannot see it" by reading the USB bus.
+Release builds embed the prebuilt iOS app, so there is no project to check out.
+The companion re-signs it and installs through whichever tool is present:
+`devicectl` (Xcode), `cfgutil` (Apple Configurator) or `ideviceinstaller`
+(libimobiledevice). Device discovery falls back to libimobiledevice when
+`devicectl` is missing, and the Devices screen tells "no iPhone attached" apart
+from "attached but Xcode's tooling cannot see it" by reading the USB bus.
 
 ### Apple ID signing
 
-**Build ▸ Apple ID Signing** signs in with an Apple ID so Apple can issue a
-development certificate and provisioning profile for this Mac — the same
-artefacts Xcode's Accounts pane obtains. The companion then registers the
-device, creates the App ID, downloads the profile, signs the bundled build and
-installs it.
-
-How the credentials are handled:
-
-* the password completes Apple's SRP exchange on this Mac and is **never written
-  to disk, never logged, and never sent to Apple** — SRP is zero-knowledge, so
-  Apple receives a proof rather than the password;
-* only the resulting session token is persisted, in the **Keychain**;
-* the private key is generated by the Security framework, marked permanent, and
-  never leaves the keychain;
-* per-device anisette headers come from macOS's own AuthKit, so nothing
-  proprietary is reimplemented.
+**Build ▸ Apple ID Signing** obtains the same certificate and profile Xcode's
+Accounts pane would. The password completes Apple's SRP exchange on this Mac and
+is never written to disk, logged, or sent to Apple — SRP is zero-knowledge, so
+Apple receives a proof. Only the session token is persisted, in the Keychain;
+the private key is generated by the Security framework and never leaves it.
 
 A free Apple ID gives a 7-day signature and a limited number of App IDs, and the
 first launch needs Settings ▸ General ▸ VPN & Device Management on the iPhone to
-trust the developer. This path uses Apple services that Apple does not document;
-if it fails, the Xcode and manual-profile paths are unaffected.
+trust the developer.
 
 > **Status:** the Apple ID path compiles but has not been exercised against
-> Apple's servers — it was written in an environment with no macOS, no Apple ID
-> and no route to Apple, so expect a debugging pass on first use.
+> Apple's servers.
 
-### Apple tools used
-
-| Tool | Used for |
-| --- | --- |
-| `xcode-select`, `xcodebuild -version`, `xcrun --find` | Toolchain detection, graceful degradation |
-| `xcrun devicectl list devices` | Device name, model, iOS version, Developer Mode, pairing state |
-| `xcodebuild … -allowProvisioningUpdates CODE_SIGN_STYLE=Automatic` | Build, code signing, certificate/profile/device registration (managed by Xcode) |
-| `codesign -dv` | Reading the signing authority applied to the built product |
-| `security find-identity`, `security cms -D` | Listing Apple Development identities and reading installed provisioning profiles |
-| `codesign --force --sign` | Re-signing the bundled build with your identity and profile |
-| `xcrun devicectl device install/launch/uninstall/info apps` | Install, launch, remove, installed-state |
-| `cfgutil install-app`, `ideviceinstaller -i` | Installing when Xcode is not present |
-| `system_profiler SPUSBDataType` | Telling "no device attached" apart from "attached but not available for development" |
-
-All process invocation lives in `macOS/Utilities/ProcessRunner.swift`; views never
-shell out.
-
-### Development signing lifecycle
-
-The companion reads the expiration date from the embedded provisioning profile
-and reports **Signed / Installed / Expiration / Days remaining / Needs rebuild**.
-When the period lapses, **Refresh Build** re-runs prepare → build → sign →
-provision → install through the same supported tooling. Nothing attempts to
-extend or bypass Apple's limits.
-
-### When Apple requires you
+## When Apple requires you
 
 The companion detects and explains, rather than working around:
 
 - Xcode or the command line developer tools missing
-- No Apple Development certificate (sign in under Xcode ▸ Settings ▸ Accounts)
-- Developer Mode off (Settings ▸ Privacy & Security ▸ Developer Mode on the iPhone)
-- Device not trusted / not paired
+- No Apple Development certificate
+- Developer Mode off
+- Device not trusted, not paired, or locked during install
 - Device not registered in a provisioning profile
-- Locked device during install
 - A device paired for Finder sync but never prepared for development — a
   separate pairing, which is why Finder can show an iPhone the companion cannot
   use until you connect it once in Xcode ▸ Window ▸ Devices and Simulators
+- macOS blocking incoming connections to the companion, which is silent: the
+  server binds and the phone's packets never arrive
 
-## iOS app — Location Tester
-
-A native SwiftUI location-testing tool for developers. All simulation happens
-inside this app's own testing surfaces: it does not hook into Core Location's
-system providers, does not modify system location services, and never changes
-what any other app receives.
-
-**Map-first workspace.** A MapKit map fills the content area (standard, hybrid
-or satellite, with zoom and recentre controls). On iPad it sits in a
-`NavigationSplitView` beside the library; on iPhone the library is a detented
-sheet. A persistent bottom bar shows the current simulated coordinate and the
-transport controls.
-
-**Locations.** Search addresses, businesses, cities and landmarks with
-`MKLocalSearchCompleter` (debounced, updating as you type), enter a coordinate
-directly in the search field or the manual latitude/longitude fields, or drop a
-pin on the map (reverse geocoded for a readable name). Selected places show
-name, address and coordinate with **Set Test Location**, **Save** and **Add
-Waypoint** actions. Saved locations support favourites and deletion.
-
-**Routes.** Add waypoints from the map or from saved locations, reorder by
-dragging, delete, move a waypoint by selecting it and tapping the map, reverse,
-clear, and set base speed and looping. Routes show waypoint count, total
-distance and estimated duration, drawn as a polyline with numbered waypoints.
-
-**Simulation.** `SimulationEngine` interpolates along the route at 5–60 Hz with
-start, pause, resume, stop and restart, and 0.25× to 10× speed. Progress,
-remaining distance and estimated time remaining update live; the marker
-animates between fixes unless Reduce Motion is on.
-
-**Scenarios.** Pair a route with a speed for a repeatable run — create, edit,
-rename, duplicate, delete and run.
-
-**Session state.** A compact indicator reports Disconnected, Connecting,
-Connected, Simulation Running, Simulation Paused or Error using a symbol and
-text, never colour alone. **Reset Test Environment** returns everything to the
-default state.
-
-**Persistence.** SwiftData stores saved locations, routes, waypoints and
-scenarios; preferences (map style, default speed, units, appearance, update
-frequency, marker animation) live in `@AppStorage`. On first launch the library
-prepared by the macOS companion and embedded in the build is imported.
-
-**Settings.** General (default map style, default speed, distance units),
-Appearance (system/light/dark), Simulation (update frequency, marker
-animation), Real Location (Core Location authorization, optional) and About
-(version, build, provisioning profile and days remaining).
-
-Accessibility: Dynamic Type throughout, VoiceOver labels/values/hints on the
-map, transport and rows, Reduce Motion respected, and hardware-keyboard support
-for the transport controls.
+Every failure is translated into a title, a plain-language explanation, a
+recommended action, and the exact command and output behind it — with **Copy
+Details** for the whole thing.
 
 ## Layout
 
 ```
-Shared/    SimulationModels.swift (both targets)
-iOS/       App/ Models/ Services/ ViewModels/ Components/ Resources/
+Shared/    SimulationModels.swift, GlassStyling.swift (both targets)
+Scripts/   fetch-idevice.sh, build-check.sh
+iOS/       App/ Models/ Services/ ViewModels/ Components/ Resources/ Support/
            Views/MainWindow Views/Sidebar Views/Map Views/Locations
-           Views/Routes Views/Scenarios Views/SimulationControls Views/Settings
-macOS/     App/ Views/ ViewModels/ Services/ Models/
-           Signing/ Devices/ Build/ Installation/ Utilities/
+           Views/Routes Views/Scenarios Views/SimulationControls
+           Views/Settings Views/Remote Views/Onboarding
+macOS/     App/ Views/ ViewModels/ Services/ Devices/ Build/
+           Installation/ Signing/ Utilities/ Resources/
 ```
 
-The iOS app follows MVVM: SwiftData models, services (`SimulationEngine`,
-`LocationSearchService`, `PersistenceService`, `LocationAuthorizationService`),
-`@Observable` view models, and small views that only read state and call
-intents.
+Both apps keep views thin: they read state and call intents. `CompanionModel`
+sequences the macOS services; `SpoofingCoordinator` decides which route a
+location change takes on iOS. All process invocation lives in
+`macOS/Utilities/ProcessRunner.swift` — views never shell out.
 
-`Services/` holds `ToolchainService`, `DeviceService`, `SigningService`,
-`BuildService` and `InstallationService`. `CompanionModel` sequences them into
-the pipeline; SwiftUI views only read state and call intents.
+## Building
 
-## Setup
-
-1. Install Xcode and open it once to accept the license.
-2. Xcode ▸ Settings ▸ Accounts: sign in with your Apple ID so Xcode can create a
-   development certificate and manage provisioning.
-3. Connect an iPhone over USB, unlock it and tap **Trust**.
-4. Enable Developer Mode on the iPhone if prompted.
-5. Run the `DissappearCompanion` scheme, pick your development team in
-   **Build**, then **Build & Install**.
-
-In Settings the companion defaults to the repository it was compiled from; choose
-`Dissappear.xcodeproj` manually if you move it.
+```
+Scripts/fetch-idevice.sh     # once, before the iOS app will link
+Scripts/build-check.sh       # both schemes, the way CI does
+```
 
 The companion runs unsandboxed (`ENABLE_APP_SANDBOX = NO`) because it drives
-command line developer tools; it is meant to be run from your own build.
+command line developer tools.
