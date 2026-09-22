@@ -1,10 +1,16 @@
 name: Build
 
+# The repository is public, so Actions minutes are free; building on every
+# push is worth it for the feedback. Docs-only changes still skip it.
 on:
   push:
     branches-ignore:
       - main
+    paths-ignore:
+      - '**/*.md'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
   workflow_dispatch:
 
 concurrency:
