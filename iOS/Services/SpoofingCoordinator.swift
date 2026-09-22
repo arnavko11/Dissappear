@@ -31,14 +31,27 @@ final class SpoofingCoordinator {
     private(set) var isLoopbackReachable = false
 
     var loopbackAddress: String {
-        didSet { UserDefaults.standard.set(loopbackAddress, forKey: "loopbackAddress") }
+        didSet {
+            UserDefaults.standard.set(loopbackAddress, forKey: "loopbackAddress")
+            // The held session points at the old address.
+            onDeviceSpoofing?.closeSession()
+            onDeviceSpoofing = nil
+        }
     }
+
+    /// One instance, kept: it holds the open connection to this device, and
+    /// rebuilding that per location change takes seconds.
+    private var onDeviceSpoofing: OnDeviceSpoofing?
 
     init(pairingRecords: PairingRecordStore, client: RemoteControlClient) {
         self.pairingRecords = pairingRecords
         self.client = client
         self.loopbackAddress = UserDefaults.standard.string(forKey: "loopbackAddress")
             ?? OnDeviceSpoofing.defaultLoopbackAddress
+
+        pairingRecords.onRecordChanged = { [weak self] in
+            self?.releaseOnDeviceSession()
+        }
     }
 
     var route: Route {
@@ -76,6 +89,7 @@ final class SpoofingCoordinator {
     }
 
     func clear() async {
+        isCompanionPlayingRoute = false
         switch route {
         case .onDevice:
             do {
@@ -89,6 +103,31 @@ final class SpoofingCoordinator {
         case .unavailable:
             break
         }
+    }
+
+    /// True while the companion is replaying a route by itself, so nothing
+    /// else pushes coordinates over the top of it.
+    private(set) var isCompanionPlayingRoute = false
+
+    /// Starts a route the best way the current route allows.
+    ///
+    /// Through the companion a whole track is handed over and replayed in one
+    /// session; on device the points are streamed, which is affordable there
+    /// because the connection is held open between them.
+    ///
+    /// Returns true when the companion took the whole route, so the caller
+    /// knows the points do not need streaming.
+    @discardableResult
+    func startRoute(name: String, waypoints: [(latitude: Double, longitude: Double)],
+                    speed: Double, loops: Bool) async -> Bool {
+        guard case .companion = route, waypoints.count > 1 else {
+            isCompanionPlayingRoute = false
+            return false
+        }
+        let accepted = await client.playRoute(name: name, waypoints: waypoints,
+                                              speed: speed, loops: loops)
+        isCompanionPlayingRoute = accepted
+        return accepted
     }
 
     /// Used while a route plays, where a failure per point would be noise.
@@ -111,7 +150,17 @@ final class SpoofingCoordinator {
     }
 
     private func onDevice() -> OnDeviceSpoofing {
-        OnDeviceSpoofing(pairingRecordURL: PairingRecordStore.url,
-                         loopbackAddress: loopbackAddress)
+        if let onDeviceSpoofing { return onDeviceSpoofing }
+        let created = OnDeviceSpoofing(pairingRecordURL: PairingRecordStore.url,
+                                       loopbackAddress: loopbackAddress)
+        onDeviceSpoofing = created
+        return created
+    }
+
+    /// Lets the device connection go, for when the record changes or the app
+    /// is put away.
+    func releaseOnDeviceSession() {
+        onDeviceSpoofing?.closeSession()
+        onDeviceSpoofing = nil
     }
 }

@@ -149,6 +149,36 @@ final class RemoteControlClient {
         }
     }
 
+    /// Hands the companion a whole route to play in one session.
+    ///
+    /// Sending a route point by point does not work: each coordinate makes
+    /// the companion open a fresh developer session, which takes seconds, so
+    /// a route arriving once a second can never keep up with itself.
+    func playRoute(name: String, waypoints: [(latitude: Double, longitude: Double)],
+                   speed: Double, loops: Bool) async -> Bool {
+        guard isConfigured, waypoints.count > 1 else { return false }
+        isBusy = true
+        defer { isBusy = false }
+
+        let payload: [String: Any] = [
+            "name": name,
+            "speed": speed,
+            "loops": loops,
+            "waypoints": waypoints.map { ["latitude": $0.latitude, "longitude": $0.longitude] }
+        ]
+
+        do {
+            _ = try await send(method: "POST", path: "/route",
+                               body: try JSONSerialization.data(withJSONObject: payload))
+            lastError = nil
+            trouble = nil
+            return true
+        } catch {
+            record(error)
+            return false
+        }
+    }
+
     /// Re-sends the last coordinate, for when the companion lost its session.
     func reapplyLastLocation() async {
         guard let lastSent else { return }

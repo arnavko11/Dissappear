@@ -1034,7 +1034,20 @@ extension CompanionModel {
 
     /// Replays a saved route on the device by handing the service a GPX track.
     func playRouteOnDevice(_ route: SimulatedRoute) async {
-        guard !isBusy, let device = selectedDevice, let tool = locationTooling.tool else { return }
+        guard let device = selectedDevice, let tool = locationTooling.tool else {
+            error = CompanionError(title: "Nothing to Play On",
+                                   details: "No iPhone is connected, or pymobiledevice3 is not installed.",
+                                   recommendedAction: "Connect an iPhone, and install the tooling from Setup.",
+                                   technicalDetails: "device = \(selectedDevice?.name ?? "nil")")
+            return
+        }
+        guard !isBusy else {
+            error = CompanionError(title: "Busy",
+                                   details: "Another operation is still running: \(activity ?? "please wait").",
+                                   recommendedAction: "Wait for it to finish, then try again.",
+                                   technicalDetails: "isBusy = true")
+            return
+        }
         guard route.waypoints.count > 1 else {
             error = CompanionError(title: "Route Needs More Waypoints",
                                    details: "A route needs at least two waypoints to replay.",
@@ -1047,6 +1060,11 @@ extension CompanionModel {
         defer { isBusy = false; activity = nil }
 
         do {
+            // A route replaces whatever is held; two sessions would fight.
+            if let existing = locationSession?.handle {
+                await locationSimulation.endSession(existing)
+                locationSession = nil
+            }
             let points = Self.densify(route: route)
             let gpx = try GPXWriter.write(coordinates: points, name: route.name)
             deviceLink = try await locationSimulation.playRoute(gpxURL: gpx, device: device, tool: tool, link: deviceLink) { [weak self] line in
@@ -1246,6 +1264,32 @@ extension CompanionModel {
                 return .error(500, "The companion did not apply the location.")
             }
             return .ok(["simulating": true, "latitude": latitude, "longitude": longitude])
+
+        case ("POST", "/route"):
+            guard let payload = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+                  let points = payload["waypoints"] as? [[String: Any]], points.count > 1 else {
+                return .error(400, "Expected at least two waypoints.")
+            }
+            let waypoints = points.compactMap { point -> SimulatedCoordinate? in
+                guard let latitude = point["latitude"] as? Double,
+                      let longitude = point["longitude"] as? Double,
+                      (-90...90).contains(latitude), (-180...180).contains(longitude) else { return nil }
+                return SimulatedCoordinate(latitude: latitude, longitude: longitude)
+            }
+            guard waypoints.count == points.count else {
+                return .error(400, "A waypoint was missing or out of range.")
+            }
+
+            error = nil
+            let route = SimulatedRoute(name: payload["name"] as? String ?? "Route",
+                                       waypoints: waypoints,
+                                       speed: payload["speed"] as? Double ?? 11,
+                                       loops: payload["loops"] as? Bool ?? false)
+            await playRouteOnDevice(route)
+            if let failure = error {
+                return .error(500, "\(failure.title): \(failure.details)")
+            }
+            return .ok(["playing": true, "waypoints": waypoints.count])
 
         case ("POST", "/clear"):
             error = nil

@@ -93,6 +93,12 @@ struct ScenariosPanel: View {
         }
         main.editingRoute = route
         main.frame(coordinates: route.coordinates)
+        Task {
+            await spoofing.startRoute(name: route.name,
+                                      waypoints: route.coordinates.map { ($0.latitude, $0.longitude) },
+                                      speed: route.baseSpeed * scenario.speedMultiplier,
+                                      loops: route.loops)
+        }
         simulation.run(scenario: scenario)
     }
 

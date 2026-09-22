@@ -56,10 +56,16 @@ final class PairingRecordStore {
         try? mutable.setResourceValues(excluded)
 
         refresh()
+        onRecordChanged?()
     }
+
+    /// Called when the record changes, so anything holding a connection made
+    /// with the old one can let it go.
+    var onRecordChanged: (() -> Void)?
 
     func removeRecord() {
         try? FileManager.default.removeItem(at: Self.url)
         refresh()
+        onRecordChanged?()
     }
 }

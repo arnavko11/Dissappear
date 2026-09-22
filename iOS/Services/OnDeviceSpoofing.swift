@@ -51,6 +51,30 @@ final class OnDeviceSpoofing {
     private let pairingRecordURL: URL
     private let loopbackAddress: String
 
+    /// The open chain, kept between calls.
+    ///
+    /// Building it takes seconds — a lockdown connection, a tunnel and an RSD
+    /// handshake — so doing it per coordinate made a route impossible and
+    /// every change sluggish. It is torn down on failure and rebuilt.
+    private var session: Session?
+
+    private struct Session {
+        var provider: OpaquePointer?
+        var adapter: OpaquePointer?
+        var handshake: OpaquePointer?
+        var server: OpaquePointer?
+        var client: OpaquePointer?
+
+        func close() {
+            // Reverse order, and only the handles idevice did not take.
+            location_simulation_free(client)
+            remote_server_free(server)
+            rsd_handshake_free(handshake)
+            adapter_free(adapter)
+            idevice_provider_free(provider)
+        }
+    }
+
     init(pairingRecordURL: URL, loopbackAddress: String = OnDeviceSpoofing.defaultLoopbackAddress) {
         self.pairingRecordURL = pairingRecordURL
         self.loopbackAddress = loopbackAddress
@@ -93,26 +117,53 @@ final class OnDeviceSpoofing {
 
     /// Sets the coordinate the whole device reports.
     func spoof(latitude: Double, longitude: Double) async throws {
-        try await withSession { client in
+        try await onOpenSession { client in
             try Self.check(location_simulation_set(client, latitude, longitude),
                            context: "Setting the location")
         }
     }
 
-    /// Puts the real GPS back.
+    /// Puts the real GPS back, and lets the session go.
     func clear() async throws {
-        try await withSession { client in
+        defer { closeSession() }
+        try await onOpenSession { client in
             try Self.check(location_simulation_clear(client), context: "Clearing the location")
+        }
+    }
+
+    /// Drops the held session, so the next call builds a fresh one.
+    func closeSession() {
+        session?.close()
+        session = nil
+    }
+
+    /// Runs `body` against the open session, opening one if needed.
+    ///
+    /// A session can go stale — the VPN drops, the device sleeps — and the
+    /// failure only shows up on use, so a first failure closes it and tries
+    /// once more with a new one rather than surfacing an error that a retry
+    /// would have fixed.
+    private func onOpenSession(_ body: (OpaquePointer?) throws -> Void) async throws {
+        if session == nil { try await openSession() }
+
+        do {
+            try body(session?.client)
+        } catch {
+            closeSession()
+            try await openSession()
+            try body(session?.client)
         }
     }
 
     // MARK: - Session
 
-    /// Opens the whole chain, runs `body`, and takes it down again.
+    /// Opens the whole chain and keeps it.
     ///
-    /// Each step owns a handle that must be freed even when a later step
-    /// throws, so they are torn down in reverse on the way out.
-    private func withSession(_ body: (OpaquePointer?) throws -> Void) async throws {
+    /// Ownership follows idevice's C API, which moves some handles and
+    /// borrows others. Freeing a moved handle is a double free and reading
+    /// one is a use-after-free, so each is noted where it happens. On the way
+    /// out through a failure, only what has actually been built is released.
+    private func openSession() async throws {
         guard FileManager.default.fileExists(atPath: pairingRecordURL.path) else {
             throw Failure.noPairingRecord
         }
@@ -120,63 +171,62 @@ final class OnDeviceSpoofing {
             throw Failure.noLoopback(loopbackAddress)
         }
 
-        // Ownership below follows idevice's C API, which moves some handles
-        // and borrows others. Freeing a moved handle is a double free, and
-        // reading one is a use-after-free, so each is noted where it happens.
+        var partial = Session()
+        // Anything built before a throw still has to be released; success
+        // hands the whole lot to `session` and clears this.
+        var keep = false
+        defer { if !keep { partial.close() } }
+
         var pairing: OpaquePointer?
         try Self.check(idevice_pairing_file_read(pairingRecordURL.path, &pairing),
                        context: "Reading the pairing record")
 
-        var provider: OpaquePointer?
         var providerError: UnsafeMutablePointer<IdeviceFfiError>?
         try withSocketAddress { address in
-            providerError = idevice_tcp_provider_new(address, pairing, "Dissappear", &provider)
+            // The provider takes the pairing file, success or failure, so it
+            // is not ours to free from here on.
+            providerError = idevice_tcp_provider_new(address, pairing, "Dissappear", &partial.provider)
         }
-        // The provider takes the pairing file, so it is not ours to free from
-        // here on — success or failure.
         try Self.check(providerError, context: "Connecting to this device")
-        defer { idevice_provider_free(provider) }
 
         var proxy: OpaquePointer?
-        try Self.check(core_device_proxy_connect(provider, &proxy),
+        try Self.check(core_device_proxy_connect(partial.provider, &proxy),
                        context: "Opening the device proxy")
 
-        // Read the port before the adapter is made: creating the adapter takes
-        // the proxy, and reading it afterwards is a use-after-free.
+        // Read the port before the adapter is made: creating the adapter
+        // takes the proxy, and reading it afterwards is a use-after-free.
         var rsdPort: UInt16 = 0
-        try Self.check(core_device_proxy_get_server_rsd_port(proxy, &rsdPort),
-                       context: "Finding the service port")
+        do {
+            try Self.check(core_device_proxy_get_server_rsd_port(proxy, &rsdPort),
+                           context: "Finding the service port")
+        } catch {
+            core_device_proxy_free(proxy)
+            throw error
+        }
 
-        // The adapter is a TCP stack in user space, so no tunnel interface and
-        // no root are needed — which is the whole reason this can run inside
-        // an ordinary sideloaded app. It takes the proxy with it.
-        var adapter: OpaquePointer?
-        try Self.check(core_device_proxy_create_tcp_adapter(proxy, &adapter),
+        // A userspace TCP stack, so no tunnel interface and no root — the
+        // whole reason this can run inside an ordinary sideloaded app. It
+        // takes the proxy with it.
+        try Self.check(core_device_proxy_create_tcp_adapter(proxy, &partial.adapter),
                        context: "Creating the tunnel")
-        defer { adapter_free(adapter) }
 
         var stream: OpaquePointer?
-        try Self.check(adapter_connect(adapter, rsdPort, &stream),
+        try Self.check(adapter_connect(partial.adapter, rsdPort, &stream),
                        context: "Connecting to the service port")
 
         // The handshake takes the stream.
-        var handshake: OpaquePointer?
-        try Self.check(rsd_handshake_new(stream, &handshake),
+        try Self.check(rsd_handshake_new(stream, &partial.handshake),
                        context: "Handshaking with the device")
-        defer { rsd_handshake_free(handshake) }
 
         // Borrows the adapter and the handshake, so both are still ours.
-        var server: OpaquePointer?
-        try Self.check(remote_server_connect_rsd(adapter, handshake, &server),
+        try Self.check(remote_server_connect_rsd(partial.adapter, partial.handshake, &partial.server),
                        context: "Opening the developer server")
-        defer { remote_server_free(server) }
 
-        var client: OpaquePointer?
-        try Self.check(location_simulation_new(server, &client),
+        try Self.check(location_simulation_new(partial.server, &partial.client),
                        context: "Opening the location service")
-        defer { location_simulation_free(client) }
 
-        try body(client)
+        keep = true
+        session = partial
     }
 
     /// Builds the `sockaddr_in` for the loopback VPN's address.
