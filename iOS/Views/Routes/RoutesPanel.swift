@@ -98,6 +98,16 @@ struct RoutesPanel: View {
             return
         }
         show(route)
+        // The engine still runs, as the clock and the dot on the map, but the
+        // companion is handed the whole track rather than a point a second:
+        // each point would open a fresh developer session, which takes longer
+        // than the interval between them.
+        Task {
+            await spoofing.startRoute(name: route.name,
+                                      waypoints: route.coordinates.map { ($0.latitude, $0.longitude) },
+                                      speed: route.baseSpeed,
+                                      loops: route.loops)
+        }
         simulation.run(route: route)
     }
 

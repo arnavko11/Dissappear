@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct DissappearApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(PreferenceKey.appearance) private var appearanceRaw = AppearanceOption.system.rawValue
     @AppStorage(PreferenceKey.defaultSpeed) private var defaultSpeed = 1.0
     @AppStorage(PreferenceKey.updateFrequency) private var updateFrequency = 20.0
@@ -55,6 +56,13 @@ struct DissappearApp: App {
                 .task {
                     // A playing route drives the real device, not a dot in here.
                     await bridge.run(engine: engine, spoofing: spoofing)
+                }
+                .onChange(of: scenePhase) { _, phase in
+                    // iOS suspends an app's sockets in the background, so a
+                    // held device connection is dead by the time the app is
+                    // opened again. Letting it go means the next spoof builds
+                    // a fresh one instead of failing on a stale handle.
+                    if phase == .background { spoofing.releaseOnDeviceSession() }
                 }
         }
         .modelContainer(container)

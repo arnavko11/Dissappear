@@ -37,6 +37,7 @@ final class ControlServer: @unchecked Sendable {
     /// again every time the companion restarts.
     private static let pairingCodeKey = "controlServer.pairingCode"
 
+    private var failedAttempts = 0
     private var storedPairingCode = ""
     private var storedPort: UInt16 = 0
 
@@ -110,6 +111,22 @@ final class ControlServer: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Backs off after repeated wrong codes, up to two seconds.
+    private func noteFailedAttempt() {
+        lock.lock(); defer { lock.unlock() }
+        failedAttempts = min(failedAttempts + 1, 20)
+    }
+
+    private func clearFailedAttempts() {
+        lock.lock(); defer { lock.unlock() }
+        failedAttempts = 0
+    }
+
+    private var failureDelayMilliseconds: Int {
+        lock.lock(); defer { lock.unlock() }
+        return min(2_000, failedAttempts * 100)
+    }
+
     /// Unambiguous characters only: this gets typed on a phone.
     private static func makePairingCode() -> String {
         let alphabet = Array("ABCDEFGHJKLMNPQRSTUVWXYZ23456789")
@@ -130,7 +147,11 @@ final class ControlServer: @unchecked Sendable {
         let listener = try NWListener(using: parameters, on: endpoint)
 
         // Announce over Bonjour so the phone can find this Mac by itself.
-        listener.service = NWListener.Service(name: Host.current().localizedName ?? "Dissappear Companion",
+        // Bonjour instance names are limited to 63 bytes; a long computer
+        // name would have been rejected outright, taking discovery with it.
+        let advertised = (Host.current().localizedName ?? "Dissappear Companion")
+            .replacingOccurrences(of: ".", with: " ")
+        listener.service = NWListener.Service(name: String(advertised.prefix(60)),
                                               type: Self.serviceType)
 
         listener.newConnectionHandler = { [weak self] connection in
@@ -247,8 +268,14 @@ final class ControlServer: @unchecked Sendable {
     private func respond(to request: Request, headers: [String: String]) async -> Response {
         let expected = pairingCode
         guard !expected.isEmpty, headers["x-pair-code"] == expected else {
+            // Slow a wrong code down. The code is long enough that guessing
+            // it is not realistic, but anything on the network can reach this
+            // port, and an unthrottled guess loop costs nothing to run.
+            noteFailedAttempt()
+            try? await Task.sleep(for: .milliseconds(failureDelayMilliseconds))
             return .error(401, "Wrong pairing code.")
         }
+        clearFailedAttempts()
         guard let handler else {
             return .error(503, "The companion is not ready.")
         }

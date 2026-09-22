@@ -51,9 +51,13 @@ thing to check — the default is StosVPN's.
 
 [StosVPN]: https://github.com/StephenDev0/StosVPN
 
-Through the companion instead, the spoof lasts as long as the Mac holds the
-session, so the Mac has to stay awake and the phone reachable. The companion
-holds off idle sleep for you while a session is live.
+Through the companion instead, the spoof lasts exactly as long as the Mac
+holds the session: the tool it drives clears the location as it shuts down.
+So the Mac has to stay awake and the phone reachable, and stopping before you
+unplug is worth the habit — pulling the cable breaks the session rather than
+closing it, which can leave the phone stuck on the last coordinate until it is
+cleared or restarted. The companion holds off idle sleep while a session is
+live, and ends the session when it quits.
 
 ## Getting started
 

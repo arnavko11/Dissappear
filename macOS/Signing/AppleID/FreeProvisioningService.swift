@@ -112,7 +112,7 @@ struct FreeProvisioningService {
     }
 
     private func profilesDirectory() throws -> URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let support = AppPaths.applicationSupport
             .appendingPathComponent("DissappearCompanion/Profiles", isDirectory: true)
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         return support

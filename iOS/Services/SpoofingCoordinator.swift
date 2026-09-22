@@ -31,19 +31,39 @@ final class SpoofingCoordinator {
     private(set) var isLoopbackReachable = false
 
     var loopbackAddress: String {
-        didSet { UserDefaults.standard.set(loopbackAddress, forKey: "loopbackAddress") }
+        didSet {
+            UserDefaults.standard.set(loopbackAddress, forKey: "loopbackAddress")
+            // The held session points at the old address.
+            onDeviceSpoofing?.closeSession()
+            onDeviceSpoofing = nil
+        }
     }
+
+    /// One instance, kept: it holds the open connection to this device, and
+    /// rebuilding that per location change takes seconds.
+    private var onDeviceSpoofing: OnDeviceSpoofing?
 
     init(pairingRecords: PairingRecordStore, client: RemoteControlClient) {
         self.pairingRecords = pairingRecords
         self.client = client
         self.loopbackAddress = UserDefaults.standard.string(forKey: "loopbackAddress")
             ?? OnDeviceSpoofing.defaultLoopbackAddress
+
+        pairingRecords.onRecordChanged = { [weak self] in
+            self?.releaseOnDeviceSession()
+        }
     }
 
     var route: Route {
-        if pairingRecords.hasRecord { return .onDevice }
+        // On device only when it can actually work. A pairing record with no
+        // loopback VPN running used to win anyway, which quietly switched off
+        // a Mac that was sitting there working.
+        if pairingRecords.hasRecord, isLoopbackReachable { return .onDevice }
         if client.canSpoof { return .companion }
+
+        if pairingRecords.hasRecord, !isLoopbackReachable {
+            return .unavailable("A pairing record is imported, but nothing is answering at \(loopbackAddress). Switch on StosVPN or LocalDevVPN, or connect the Mac companion.")
+        }
         return .unavailable(client.unavailableReason
             ?? "Import a pairing record, or pair the Mac companion.")
     }
@@ -64,6 +84,7 @@ final class SpoofingCoordinator {
         case .onDevice:
             do {
                 try await onDevice().spoof(latitude: latitude, longitude: longitude)
+                hasPushedOnDevice = true
                 lastOnDeviceFailure = nil
             } catch {
                 lastOnDeviceFailure = error.localizedDescription
@@ -76,10 +97,12 @@ final class SpoofingCoordinator {
     }
 
     func clear() async {
+        isCompanionPlayingRoute = false
         switch route {
         case .onDevice:
             do {
                 try await onDevice().clear()
+                hasPushedOnDevice = false
                 lastOnDeviceFailure = nil
             } catch {
                 lastOnDeviceFailure = error.localizedDescription
@@ -91,11 +114,50 @@ final class SpoofingCoordinator {
         }
     }
 
+    /// True while the companion is replaying a route by itself, so nothing
+    /// else pushes coordinates over the top of it.
+    private(set) var isCompanionPlayingRoute = false
+
+    /// Whether a location is currently in force on the device, by either
+    /// route. Stopping has to stay available even when the local clock is
+    /// idle, because the device can be spoofed without one running.
+    var isSpoofing: Bool {
+        if isCompanionPlayingRoute { return true }
+        if client.status?.simulating == true { return true }
+        return hasPushedOnDevice
+    }
+
+    /// Set once this phone has applied a location to itself, since nothing
+    /// else reports that state back.
+    private var hasPushedOnDevice = false
+
+    /// Starts a route the best way the current route allows.
+    ///
+    /// Through the companion a whole track is handed over and replayed in one
+    /// session; on device the points are streamed, which is affordable there
+    /// because the connection is held open between them.
+    ///
+    /// Returns true when the companion took the whole route, so the caller
+    /// knows the points do not need streaming.
+    @discardableResult
+    func startRoute(name: String, waypoints: [(latitude: Double, longitude: Double)],
+                    speed: Double, loops: Bool) async -> Bool {
+        guard case .companion = route, waypoints.count > 1 else {
+            isCompanionPlayingRoute = false
+            return false
+        }
+        let accepted = await client.playRoute(name: name, waypoints: waypoints,
+                                              speed: speed, loops: loops)
+        isCompanionPlayingRoute = accepted
+        return accepted
+    }
+
     /// Used while a route plays, where a failure per point would be noise.
     func push(latitude: Double, longitude: Double, name: String?) async {
         switch route {
         case .onDevice:
             try? await onDevice().spoof(latitude: latitude, longitude: longitude)
+            hasPushedOnDevice = true
         case .companion:
             await client.push(latitude: latitude, longitude: longitude, name: name)
         case .unavailable:
@@ -106,12 +168,37 @@ final class SpoofingCoordinator {
     /// Checks the loopback VPN, so Settings can show its state rather than
     /// leaving it to be discovered by a failed spoof.
     func refreshLoopback() async {
-        guard pairingRecords.hasRecord else { return }
+        guard pairingRecords.hasRecord else {
+            isLoopbackReachable = false
+            return
+        }
         isLoopbackReachable = await onDevice().isLoopbackReachable()
+        lastLoopbackCheck = .now
+    }
+
+    private var lastLoopbackCheck: Date?
+
+    /// Re-checks the VPN when the last look is old enough to be worth
+    /// repeating. Another app owns it and can switch it off at any time, but
+    /// the check costs a connection attempt, so it is not done per call.
+    func refreshLoopbackIfStale(after interval: TimeInterval = 10) async {
+        guard pairingRecords.hasRecord else { return }
+        if let lastLoopbackCheck, Date.now.timeIntervalSince(lastLoopbackCheck) < interval { return }
+        await refreshLoopback()
     }
 
     private func onDevice() -> OnDeviceSpoofing {
-        OnDeviceSpoofing(pairingRecordURL: PairingRecordStore.url,
-                         loopbackAddress: loopbackAddress)
+        if let onDeviceSpoofing { return onDeviceSpoofing }
+        let created = OnDeviceSpoofing(pairingRecordURL: PairingRecordStore.url,
+                                       loopbackAddress: loopbackAddress)
+        onDeviceSpoofing = created
+        return created
+    }
+
+    /// Lets the device connection go, for when the record changes or the app
+    /// is put away.
+    func releaseOnDeviceSession() {
+        onDeviceSpoofing?.closeSession()
+        onDeviceSpoofing = nil
     }
 }

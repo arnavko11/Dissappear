@@ -929,7 +929,10 @@ extension CompanionModel {
 
         locationSessionMonitor = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(4))
+                // Each presence check runs devicectl, so this is deliberately
+                // not frequent: it is watching for a cable being pulled, not
+                // timing anything.
+                try? await Task.sleep(for: .seconds(8))
                 guard let self, !Task.isCancelled, self.deviceLocation != nil else { return }
 
                 // A held process that exited means the spoof really is over.
@@ -964,11 +967,11 @@ extension CompanionModel {
     }
 
     static let detachedExplanation = """
-    The iPhone has left, and it is still reporting the spoofed location — a \
-    spoof outlives the connection that set it, so this is the way to take one \
-    out of the house. What you cannot do from here is change it: that needs \
-    the phone back on USB or on this network. Reconnect and press Stop \
-    Spoofing to end it, or restart the phone.
+    The iPhone has gone, and the session spoofing it went with it. A spoof \
+    lasts only while that session is held, so the phone is either back on \
+    real GPS already or stuck on the last coordinate because the session \
+    broke rather than closed. Reconnect and press Stop Spoofing to be sure of \
+    which; restarting the phone also clears it.
     """
 
     /// A cheap presence check for the watcher, which runs every few seconds.
@@ -1034,7 +1037,20 @@ extension CompanionModel {
 
     /// Replays a saved route on the device by handing the service a GPX track.
     func playRouteOnDevice(_ route: SimulatedRoute) async {
-        guard !isBusy, let device = selectedDevice, let tool = locationTooling.tool else { return }
+        guard let device = selectedDevice, let tool = locationTooling.tool else {
+            error = CompanionError(title: "Nothing to Play On",
+                                   details: "No iPhone is connected, or pymobiledevice3 is not installed.",
+                                   recommendedAction: "Connect an iPhone, and install the tooling from Setup.",
+                                   technicalDetails: "device = \(selectedDevice?.name ?? "nil")")
+            return
+        }
+        guard !isBusy else {
+            error = CompanionError(title: "Busy",
+                                   details: "Another operation is still running: \(activity ?? "please wait").",
+                                   recommendedAction: "Wait for it to finish, then try again.",
+                                   technicalDetails: "isBusy = true")
+            return
+        }
         guard route.waypoints.count > 1 else {
             error = CompanionError(title: "Route Needs More Waypoints",
                                    details: "A route needs at least two waypoints to replay.",
@@ -1047,13 +1063,26 @@ extension CompanionModel {
         defer { isBusy = false; activity = nil }
 
         do {
+            // A route replaces whatever is held; two sessions would fight.
+            if let existing = locationSession?.handle {
+                await locationSimulation.endSession(existing)
+                locationSession = nil
+            }
             let points = Self.densify(route: route)
             let gpx = try GPXWriter.write(coordinates: points, name: route.name)
-            deviceLink = try await locationSimulation.playRoute(gpxURL: gpx, device: device, tool: tool, link: deviceLink) { [weak self] line in
+            let outcome = try await locationSimulation.playRoute(gpxURL: gpx, device: device,
+                                                                 tool: tool, link: deviceLink) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }
+            locationSession = outcome.0
+            deviceLink = outcome.1
             deviceLocationName = route.name
             deviceLocation = points.last.map { SimulatedCoordinate(latitude: $0.latitude, longitude: $0.longitude) }
+            sessionLostReason = nil
+            isDeviceDetached = false
+            monitorLocationSession()
+            wakeAssertion.acquire(reason: WakeAssertion.Reason.locationSession)
+            isKeepingAwake = wakeAssertion.isActive
         } catch let failure as CompanionError {
             error = failure
         } catch {
@@ -1062,18 +1091,43 @@ extension CompanionModel {
     }
 
     /// One point per second of travel, so playback moves at the route's speed.
+    /// Turns a route's corners into a track the device can be walked along.
+    ///
+    /// The point count is capped. One point per second of travel is right for
+    /// a short route, but a long one at walking pace works out at hundreds of
+    /// thousands, which is a GPX file nothing wants to write or read; past
+    /// the cap the spacing simply widens.
     private static func densify(route: SimulatedRoute) -> [(latitude: Double, longitude: Double)] {
-        var points: [(latitude: Double, longitude: Double)] = []
-        let step = max(route.speed, 0.5)
+        let maximumPoints = 20_000
 
-        for (start, end) in zip(route.waypoints, route.waypoints.dropFirst()) {
+        let legs = Array(zip(route.waypoints, route.waypoints.dropFirst()))
+        let total = legs.reduce(0.0) { sum, leg in
+            let distance = GeoMath.distance(leg.0, leg.1)
+            return sum + (distance.isFinite ? distance : 0)
+        }
+
+        // A metre a point at the slowest, and wider if the route is long
+        // enough that the cap would otherwise be passed.
+        var step = max(route.speed, 0.5)
+        if total / step > Double(maximumPoints) {
+            step = total / Double(maximumPoints)
+        }
+
+        var points: [(latitude: Double, longitude: Double)] = []
+        for (start, end) in legs {
             let distance = GeoMath.distance(start, end)
-            let count = max(1, Int(distance / step))
+            // A non-finite distance means a corrupt coordinate, and Int() of
+            // one traps rather than failing.
+            guard distance.isFinite, step > 0 else { continue }
+
+            let count = max(1, min(maximumPoints, Int(distance / step)))
             for index in 0..<count {
                 let coordinate = GeoMath.interpolate(start, end, fraction: Double(index) / Double(count))
                 points.append((coordinate.latitude, coordinate.longitude))
             }
+            if points.count >= maximumPoints { break }
         }
+
         if let last = route.waypoints.last {
             points.append((last.latitude, last.longitude))
         }
@@ -1194,6 +1248,18 @@ extension CompanionModel {
         }
     }
 
+    /// Ends everything held before the app goes away.
+    ///
+    /// Terminating the spoofing session is what puts the real location back,
+    /// so quitting without it leaves the phone reporting a lie that nothing
+    /// can now correct.
+    func shutDown() async {
+        controlServer.stop()
+        await ProcessRunner.shared.stopAll()
+        wakeAssertion.release(reason: WakeAssertion.Reason.locationSession)
+        wakeAssertion.release(reason: WakeAssertion.Reason.remoteControl)
+    }
+
     /// Invalidates the code a phone was paired with.
     func regeneratePairingCode() {
         controlServer.rotatePairingCode()
@@ -1246,6 +1312,32 @@ extension CompanionModel {
                 return .error(500, "The companion did not apply the location.")
             }
             return .ok(["simulating": true, "latitude": latitude, "longitude": longitude])
+
+        case ("POST", "/route"):
+            guard let payload = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+                  let points = payload["waypoints"] as? [[String: Any]], points.count > 1 else {
+                return .error(400, "Expected at least two waypoints.")
+            }
+            let waypoints = points.compactMap { point -> SimulatedCoordinate? in
+                guard let latitude = point["latitude"] as? Double,
+                      let longitude = point["longitude"] as? Double,
+                      (-90...90).contains(latitude), (-180...180).contains(longitude) else { return nil }
+                return SimulatedCoordinate(latitude: latitude, longitude: longitude)
+            }
+            guard waypoints.count == points.count else {
+                return .error(400, "A waypoint was missing or out of range.")
+            }
+
+            error = nil
+            let route = SimulatedRoute(name: payload["name"] as? String ?? "Route",
+                                       waypoints: waypoints,
+                                       speed: payload["speed"] as? Double ?? 11,
+                                       loops: payload["loops"] as? Bool ?? false)
+            await playRouteOnDevice(route)
+            if let failure = error {
+                return .error(500, "\(failure.title): \(failure.details)")
+            }
+            return .ok(["playing": true, "waypoints": waypoints.count])
 
         case ("POST", "/clear"):
             error = nil

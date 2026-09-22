@@ -4,6 +4,7 @@ import SwiftUI
 /// holding the developer session somewhere else on the network.
 struct RemoteControlView: View {
     @Environment(RemoteControlClient.self) private var client
+    @Environment(SpoofingCoordinator.self) private var spoofing
     @Environment(MainViewModel.self) private var main
     @State private var discovery = RemoteDiscovery()
 
@@ -136,29 +137,31 @@ struct RemoteControlView: View {
             Section("Send") {
                 Button {
                     guard let centre = main.visibleRegion?.center else { return }
-                    Task { await client.setLocation(latitude: centre.latitude,
-                                                    longitude: centre.longitude,
-                                                    name: "Map centre") }
+                    // Through the coordinator, so it works whichever way this
+                    // phone is spoofing rather than only through the Mac.
+                    Task { await spoofing.spoof(latitude: centre.latitude,
+                                                longitude: centre.longitude,
+                                                name: "Map centre") }
                 } label: {
                     Label("Use Map Centre", systemImage: "scope")
                 }
-                .disabled(!client.isConfigured || client.isBusy || main.visibleRegion == nil)
+                .disabled(!spoofing.canSpoof || client.isBusy || main.visibleRegion == nil)
 
                 Button(role: .destructive) {
-                    Task { await client.clearLocation() }
+                    Task { await spoofing.clear() }
                 } label: {
                     Label("Restore Real Location", systemImage: "location.slash")
                 }
-                .disabled(!client.isConfigured || client.isBusy)
+                .disabled(client.isBusy)
             }
 
             if !client.places.isEmpty {
                 Section("Saved on the Mac") {
                     ForEach(client.places) { place in
                         Button {
-                            Task { await client.setLocation(latitude: place.latitude,
-                                                            longitude: place.longitude,
-                                                            name: place.name) }
+                            Task { await spoofing.spoof(latitude: place.latitude,
+                                                        longitude: place.longitude,
+                                                        name: place.name) }
                         } label: {
                             PlaceRow(title: place.name,
                                      subtitle: String(format: "%.5f, %.5f", place.latitude, place.longitude))

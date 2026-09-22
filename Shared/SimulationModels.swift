@@ -149,8 +149,20 @@ public enum GeoMath {
 
     public static func interpolate(_ a: SimulatedCoordinate, _ b: SimulatedCoordinate, fraction: Double) -> SimulatedCoordinate {
         let t = max(0, min(1, fraction))
+
+        // Take the short way round the date line. Interpolating -179 to 179
+        // as plain numbers sweeps the whole globe westward instead of the two
+        // degrees east that the distance between them actually is.
+        var deltaLongitude = b.longitude - a.longitude
+        if deltaLongitude > 180 { deltaLongitude -= 360 }
+        if deltaLongitude < -180 { deltaLongitude += 360 }
+
+        var longitude = a.longitude + deltaLongitude * t
+        if longitude > 180 { longitude -= 360 }
+        if longitude < -180 { longitude += 360 }
+
         return SimulatedCoordinate(latitude: a.latitude + (b.latitude - a.latitude) * t,
-                                   longitude: a.longitude + (b.longitude - a.longitude) * t,
+                                   longitude: longitude,
                                    altitude: a.altitude + (b.altitude - a.altitude) * t)
     }
 

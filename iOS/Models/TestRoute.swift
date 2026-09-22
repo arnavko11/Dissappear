@@ -94,8 +94,19 @@ enum RouteMath {
                             to end: CLLocationCoordinate2D,
                             fraction: Double) -> CLLocationCoordinate2D {
         let t = min(max(fraction, 0), 1)
+
+        // The short way round the date line: -179 to 179 is two degrees east,
+        // not 358 degrees west across the whole globe.
+        var deltaLongitude = end.longitude - start.longitude
+        if deltaLongitude > 180 { deltaLongitude -= 360 }
+        if deltaLongitude < -180 { deltaLongitude += 360 }
+
+        var longitude = start.longitude + deltaLongitude * t
+        if longitude > 180 { longitude -= 360 }
+        if longitude < -180 { longitude += 360 }
+
         return CLLocationCoordinate2D(latitude: start.latitude + (end.latitude - start.latitude) * t,
-                                      longitude: start.longitude + (end.longitude - start.longitude) * t)
+                                      longitude: longitude)
     }
 
     static func course(from start: CLLocationCoordinate2D, to end: CLLocationCoordinate2D) -> CLLocationDirection {
