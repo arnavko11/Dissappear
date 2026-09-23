@@ -42,6 +42,7 @@ final class SpoofingCoordinator {
     /// One instance, kept: it holds the open connection to this device, and
     /// rebuilding that per location change takes seconds.
     private var onDeviceSpoofing: OnDeviceSpoofing?
+    private let keepAlive = BackgroundKeepAlive()
 
     init(pairingRecords: PairingRecordStore, client: RemoteControlClient) {
         self.pairingRecords = pairingRecords
@@ -100,6 +101,7 @@ final class SpoofingCoordinator {
             do {
                 try await onDevice().spoof(latitude: latitude, longitude: longitude)
                 hasPushedOnDevice = true
+                keepAlive.start()
                 lastOnDeviceFailure = nil
                 lastFailure = nil
                 current = Spoofed(latitude: latitude, longitude: longitude, name: name)
@@ -128,6 +130,7 @@ final class SpoofingCoordinator {
             do {
                 try await onDevice().clear()
                 hasPushedOnDevice = false
+                keepAlive.stop()
                 lastOnDeviceFailure = nil
                 current = nil
             } catch {
@@ -199,6 +202,7 @@ final class SpoofingCoordinator {
         case .onDevice:
             try? await onDevice().spoof(latitude: latitude, longitude: longitude)
             hasPushedOnDevice = true
+            keepAlive.start()
         case .companion:
             await client.push(latitude: latitude, longitude: longitude, name: name)
         case .unavailable:
@@ -241,5 +245,8 @@ final class SpoofingCoordinator {
     func releaseOnDeviceSession() {
         onDeviceSpoofing?.closeSession()
         onDeviceSpoofing = nil
+        keepAlive.stop()
+        hasPushedOnDevice = false
+        current = nil
     }
 }

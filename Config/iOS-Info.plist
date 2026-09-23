@@ -9,5 +9,12 @@
 	<array>
 		<string>_dissappear._tcp</string>
 	</array>
+	<!-- Keeps the app running while it spoofs this phone by itself. The spoof
+	     lasts only as long as the app's connection to the device; suspended,
+	     the heartbeat goes unanswered and iOS drops it. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 </dict>
 </plist>
