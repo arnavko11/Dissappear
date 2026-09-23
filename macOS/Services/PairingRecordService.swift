@@ -75,19 +75,45 @@ struct PairingRecordService {
         }
     }
 
-    /// The Python that pymobiledevice3 runs under, read from its launcher so
-    /// the script imports the same installation.
+    /// The Python that pymobiledevice3 runs under, so the script imports the
+    /// same installation.
+    ///
+    /// The launcher's first line is not reliable: when the environment's path
+    /// has a space in it — ours lives under "Application Support" — pip writes
+    /// a `#!/bin/sh` launcher that re-execs Python, and taking that line at
+    /// its word ran the script through the shell. So: the Python beside the
+    /// resolved launcher first (every venv, Homebrew's libexec), then the path
+    /// inside a shell launcher, then the shebang, then the system Python.
     static func interpreter(for executable: String) -> String {
-        if let handle = FileHandle(forReadingAtPath: executable),
-           let head = try? handle.read(upToCount: 512),
-           let line = String(data: head, encoding: .utf8)?.split(separator: "\n").first,
-           line.hasPrefix("#!") {
-            let path = line.dropFirst(2).trimmingCharacters(in: .whitespaces)
-            if !path.contains(" "), FileManager.default.isExecutableFile(atPath: path) { return path }
+        let manager = FileManager.default
+        let resolved = URL(fileURLWithPath: executable).resolvingSymlinksInPath()
+        for name in ["python3", "python"] {
+            let sibling = resolved.deletingLastPathComponent().appendingPathComponent(name).path
+            if manager.isExecutableFile(atPath: sibling) { return sibling }
         }
-        let sibling = URL(fileURLWithPath: executable).deletingLastPathComponent()
-            .appendingPathComponent("python3").path
-        return FileManager.default.isExecutableFile(atPath: sibling) ? sibling : "/usr/bin/python3"
+
+        if let handle = FileHandle(forReadingAtPath: resolved.path),
+           let head = try? handle.read(upToCount: 1024),
+           let text = String(data: head, encoding: .utf8) {
+            let lines = text.split(separator: "\n").prefix(3).map(String.init)
+            // pip's shell launcher quotes the Python path after `exec`.
+            for line in lines where line.contains("exec") {
+                let parts = line.split(separator: "\"")
+                if parts.count > 1 {
+                    let candidate = String(parts[1])
+                    if candidate.contains("python"), manager.isExecutableFile(atPath: candidate) {
+                        return candidate
+                    }
+                }
+            }
+            if let first = lines.first, first.hasPrefix("#!") {
+                let path = first.dropFirst(2).trimmingCharacters(in: .whitespaces)
+                if path.contains("python"), !path.contains(" "), manager.isExecutableFile(atPath: path) {
+                    return path
+                }
+            }
+        }
+        return "/usr/bin/python3"
     }
 
     /// Turns on the phone's network lockdown connections — the same switch as
