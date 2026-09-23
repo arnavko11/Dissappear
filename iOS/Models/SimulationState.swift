@@ -21,45 +21,6 @@ struct SimulatedFix: Equatable {
     }
 }
 
-/// State of the in-app test session. Nothing here changes system location for
-/// other apps — it describes this app's own simulated test environment.
-enum SessionStatus: Equatable {
-    case disconnected
-    case connecting
-    case connected
-    case running
-    case paused
-    case error(String)
-
-    var title: String {
-        switch self {
-        case .disconnected: return "Disconnected"
-        case .connecting: return "Connecting"
-        case .connected: return "Connected"
-        case .running: return "Simulation Running"
-        case .paused: return "Simulation Paused"
-        case .error: return "Error"
-        }
-    }
-
-    /// State is conveyed by symbol and text as well as colour.
-    var symbolName: String {
-        switch self {
-        case .disconnected: return "circle.dotted"
-        case .connecting: return "circle.dashed"
-        case .connected: return "checkmark.circle.fill"
-        case .running: return "play.circle.fill"
-        case .paused: return "pause.circle.fill"
-        case .error: return "exclamationmark.triangle.fill"
-        }
-    }
-
-    var detail: String? {
-        if case let .error(message) = self { return message }
-        return nil
-    }
-}
-
 struct RouteSnapshot: Equatable {
     var name: String
     var coordinates: [CLLocationCoordinate2D]

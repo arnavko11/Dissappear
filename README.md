@@ -113,11 +113,15 @@ clock. Through the companion the whole track is handed over and replayed in one
 session; on the phone's own route the points are streamed, which is affordable
 there because the connection is held open between them.
 
-**Scenarios.** A route paired with a speed, for a repeatable run.
+**Main screen.** The spoofed location, **Spoof Here** for the spot under the
+crosshair, and **Real Location** to put it back. Tap the map to drop a pin; a
+searched place shows the same card on the map. The status chip opens
+**Connection**, which holds everything setup needs.
 
-**Remote.** Finds companions over Bonjour, takes the pairing code, and reports
-what the Mac can see. Every request carries the code, and nothing but the
-location controls is exposed.
+**Pairing with the Mac.** Nothing to type. The phone finds the companion over
+Bonjour and asks it to pair; someone at the Mac clicks Allow, and the phone is
+handed the code every later request carries. iOS apps cannot talk through the
+cable, so this uses the local network even while plugged in.
 
 Accessibility: Dynamic Type throughout, VoiceOver labels on the map, transport
 and rows, Reduce Motion respected, hardware-keyboard support for the transport.
@@ -184,8 +188,8 @@ Shared/    SimulationModels.swift, GlassStyling.swift (both targets)
 Scripts/   fetch-idevice.sh, build-check.sh
 iOS/       App/ Models/ Services/ ViewModels/ Components/ Resources/ Support/
            Views/MainWindow Views/Sidebar Views/Map Views/Locations
-           Views/Routes Views/Scenarios Views/SimulationControls
-           Views/Settings Views/Remote Views/Onboarding
+           Views/Routes Views/SimulationControls Views/Connection
+           Views/Settings Views/Onboarding
 macOS/     App/ Views/ ViewModels/ Services/ Devices/ Build/
            Installation/ Signing/ Utilities/ Resources/
 ```

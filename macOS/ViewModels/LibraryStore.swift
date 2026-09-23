@@ -51,14 +51,6 @@ final class LibraryStore: ObservableObject {
         library.scenarios.removeAll { $0.routeID.map(ids.contains) ?? false }
     }
 
-    func addScenario(_ scenario: SimulationScenario) {
-        library.scenarios.append(scenario)
-    }
-
-    func removeScenarios(_ ids: Set<UUID>) {
-        library.scenarios.removeAll { ids.contains($0.id) }
-    }
-
     private func save() {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

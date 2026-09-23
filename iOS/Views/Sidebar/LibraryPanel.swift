@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The sidebar content: search, saved locations, routes and scenarios.
+/// The sidebar content: search, saved locations and routes.
 struct LibraryPanel: View {
     @Environment(MainViewModel.self) private var main
 
@@ -28,8 +28,6 @@ struct LibraryPanel: View {
                     case .search: SearchPanel()
                     case .saved: SavedLocationsPanel()
                     case .routes: RoutesPanel()
-                    case .scenarios: ScenariosPanel()
-                    case .remote: RemoteControlView()
                     }
                 }
                 .transition(.opacity)

@@ -20,7 +20,7 @@ struct RealLocationSection: View {
         } header: {
             Text("Device Location")
         } footer: {
-            Text("What iOS reports to every app. If the macOS companion has set a simulated location, this shows it — that is how you tell the spoof is working. The in-app simulation on the Simulation tab does not change this.")
+            Text("What iOS reports to every app. When a spoof is in force this shows the spoofed spot — the quickest way to confirm it is working.")
         }
         .task {
             authorization.requestAuthorization()

@@ -34,6 +34,9 @@ final class CompanionModel: ObservableObject {
     /// The phone left while a spoofed location was in force on it. The spoof
     /// is still set; nothing here can reach it until the phone is back.
     @Published private(set) var isDeviceDetached = false
+    /// Automatic re-opens since the last spoof the user asked for, so a
+    /// phone that is really gone is not retried forever.
+    private var resumeAttempts = 0
     /// How the tool last reached the device, so the next command starts with
     /// what already worked instead of searching again.
     @Published private(set) var deviceLink: LocationSimulationService.Link?
@@ -43,8 +46,6 @@ final class CompanionModel: ObservableObject {
     /// Whether macOS is quietly dropping the phone's connections.
     @Published private(set) var firewallStatus: FirewallService.Status = .unknown
     @Published private(set) var isKeepingAwake = false
-    /// Address that works from outside the home network, when a mesh VPN is set up.
-    @Published private(set) var remoteAddress: MeshNetworkService.Address?
     @Published var selectedDeviceID: Device.ID?
     @Published private(set) var identities: [SigningIdentity] = []
     @Published var selectedIdentityID: SigningIdentity.ID?
@@ -76,7 +77,6 @@ final class CompanionModel: ObservableObject {
     fileprivate let toolInstaller = PyMobileDevice3Installer()
     fileprivate let controlServer = ControlServer()
     fileprivate let wakeAssertion = WakeAssertion()
-    fileprivate let meshNetwork = MeshNetworkService()
     fileprivate let firewall = FirewallService()
     fileprivate let pairingRecords = PairingRecordService()
     private let libraryStore: LibraryStore
@@ -352,7 +352,7 @@ final class CompanionModel: ObservableObject {
         guard let device = selectedDevice else { return }
         isBusy = true
         defer { isBusy = false; activity = nil }
-        activity = "Removing test app"
+        activity = "Removing the iPhone app"
         do {
             try await installationService.uninstall(bundleIdentifier: bundleIdentifier, from: device, using: requireTool())
             appendLog("Removed \(bundleIdentifier) from \(device.name)")
@@ -445,9 +445,9 @@ final class CompanionModel: ObservableObject {
         }
         do {
             let written = try buildService.prepare(configuration: configuration, library: libraryStore.library)
-            let counts = "\(libraryStore.library.locations.count) locations · \(libraryStore.library.routes.count) routes · \(libraryStore.library.scenarios.count) scenarios"
+            let counts = "\(libraryStore.library.locations.count) locations · \(libraryStore.library.routes.count) routes"
             stages[.prepare] = .succeeded(counts)
-            appendLog("Prepared simulation library at \(written.path)")
+            appendLog("Prepared location library at \(written.path)")
         } catch let failure as CompanionError {
             stages[.prepare] = .failed(failure.details)
             throw failure
@@ -938,6 +938,22 @@ extension CompanionModel {
                 // A held process that exited means the spoof really is over.
                 if let handle = self.locationSession?.handle,
                    !(await self.locationSimulation.isSessionActive(handle)) {
+                    // Pulling the cable kills a session that ran over USB,
+                    // but the phone can often still be reached over Wi-Fi.
+                    // Re-open it there rather than dropping the spoof, so
+                    // unplugging does not snap the phone back to real GPS.
+                    if let location = self.deviceLocation,
+                       !self.isBusy, self.resumeAttempts < 3,
+                       let udid = watchedUDID, await self.isDevicePresent(udid: udid) {
+                        self.resumeAttempts += 1
+                        self.appendLog("Session dropped — re-opening it (attempt \(self.resumeAttempts))")
+                        self.locationSession = nil
+                        self.deviceLink = nil
+                        await self.setDeviceLocation(latitude: location.latitude,
+                                                     longitude: location.longitude,
+                                                     name: self.deviceLocationName)
+                        if self.locationSession != nil { return }   // a new monitor took over
+                    }
                     self.locationSession = nil
                     self.deviceLocation = nil
                     self.sessionLostReason = "The spoofing session ended, so the device is back on real GPS."
@@ -946,6 +962,8 @@ extension CompanionModel {
                     self.appendLog("✗ Location session ended")
                     return
                 }
+
+                if self.locationSession?.handle != nil { self.resumeAttempts = 0 }
 
                 // The phone going away is not the spoof ending. It is the
                 // spoof becoming unreachable while still in force.
@@ -1174,6 +1192,9 @@ extension CompanionModel {
         controlServer.onStateChange = { [weak self] result in
             Task { @MainActor in self?.controlServerBecame(result) }
         }
+        controlServer.onPairRequest = { [weak self] name in
+            await self?.approvePairing(name: name) ?? false
+        }
 
         do {
             try controlServer.start()
@@ -1197,7 +1218,6 @@ extension CompanionModel {
             wakeAssertion.acquire(reason: WakeAssertion.Reason.remoteControl)
             isKeepingAwake = wakeAssertion.isActive
             appendLog("Remote control listening on \(controlServerAddress ?? "")")
-            Task { remoteAddress = await meshNetwork.remoteAddress() }
             Task { await refreshFirewallStatus() }
 
         case let .failure(error):
@@ -1260,11 +1280,25 @@ extension CompanionModel {
         wakeAssertion.release(reason: WakeAssertion.Reason.remoteControl)
     }
 
-    /// Invalidates the code a phone was paired with.
+    /// Unpairs every phone: the code they were handed stops working, and
+    /// each has to be approved again.
     func regeneratePairingCode() {
         controlServer.rotatePairingCode()
         controlServerCode = controlServer.pairingCode
-        appendLog("Pairing code regenerated")
+        appendLog("Forgot all paired iPhones")
+    }
+
+    /// Shows the approval prompt when a phone on the network asks to pair.
+    private func approvePairing(name: String) async -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Allow “\(name)” to control spoofing?"
+        alert.informativeText = "It will be able to set and clear this Mac's spoofed location from the Dissappear app. Only allow your own iPhone."
+        alert.addButton(withTitle: "Allow")
+        alert.addButton(withTitle: "Don't Allow")
+        let allowed = alert.runModal() == .alertFirstButtonReturn
+        appendLog(allowed ? "Paired \(name)" : "Declined pairing from \(name)")
+        return allowed
     }
 
     private func handleControlRequest(_ request: ControlServer.Request) async -> ControlServer.Response {

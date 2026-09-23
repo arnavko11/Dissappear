@@ -79,9 +79,9 @@ final class PairingRecordStore {
             case .notARecord:
                 return "That file is not a pairing record."
             case let .missingKeys(keys):
-                return "That pairing record is missing \(keys.joined(separator: ", ")). Export a fresh one from the Mac companion under Devices."
+                return "That pairing record is missing \(keys.joined(separator: ", ")). Export Pairing Record again from the Mac companion."
             case .noEscrowBag:
-                return "That pairing record has no escrow bag, so the iPhone will refuse it whenever the screen is locked. Export a fresh one with the phone unlocked and trusting the Mac."
+                return "That record is a copy of the Mac's own pairing, which macOS gives out without the escrow bag — and without it the iPhone hangs up on every session. Update the Mac companion, then Export Pairing Record again with the iPhone plugged in and unlocked, and tap Trust. The new export pairs fresh and includes it."
             }
         }
     }

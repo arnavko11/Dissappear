@@ -54,6 +54,18 @@ struct DissappearApp: App {
                     PersistenceService(context: container.mainContext).seedIfNeeded()
                 }
                 .task {
+                    // Finds and pairs with the Mac on its own; nothing to type.
+                    remoteControl.start()
+                    // The VPN belongs to another app and can go at any time,
+                    // so whether on-device spoofing is possible is watched
+                    // here, app-wide — it used to be checked only while
+                    // Settings was open, so the route never switched to it.
+                    while !Task.isCancelled {
+                        await spoofing.refreshLoopback()
+                        try? await Task.sleep(for: .seconds(5))
+                    }
+                }
+                .task {
                     // A playing route drives the real device, not a dot in here.
                     await bridge.run(engine: engine, spoofing: spoofing)
                 }

@@ -26,7 +26,6 @@ struct PersistenceService {
                                          longitude: location.coordinate.longitude))
         }
 
-        var importedRoutes: [UUID: TestRoute] = [:]
         for route in library.routes where route.waypoints.count > 1 {
             let imported = TestRoute(name: route.name, baseSpeed: max(route.speed, 0.1), loops: route.loops)
             context.insert(imported)
@@ -38,12 +37,6 @@ struct PersistenceService {
                 point.route = imported
                 imported.waypoints.append(point)
             }
-            importedRoutes[route.id] = imported
-        }
-
-        for scenario in library.scenarios where scenario.kind == .route {
-            guard let routeID = scenario.routeID, let route = importedRoutes[routeID] else { continue }
-            context.insert(TestScenario(name: scenario.name, notes: scenario.summary, route: route))
         }
 
         // Marked only once the work is done: it used to be set first, so a

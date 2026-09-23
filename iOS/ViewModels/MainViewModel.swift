@@ -7,8 +7,6 @@ enum LibrarySection: String, CaseIterable, Identifiable, Hashable {
     case search = "Search"
     case saved = "Saved"
     case routes = "Routes"
-    case scenarios = "Scenarios"
-    case remote = "Remote"
 
     var id: String { rawValue }
 
@@ -17,8 +15,6 @@ enum LibrarySection: String, CaseIterable, Identifiable, Hashable {
         case .search: return "magnifyingglass"
         case .saved: return "mappin.and.ellipse"
         case .routes: return "point.topleft.down.to.point.bottomright.curvepath"
-        case .scenarios: return "list.bullet.rectangle"
-        case .remote: return "antenna.radiowaves.left.and.right"
         }
     }
 }
@@ -42,19 +38,6 @@ final class MainViewModel {
     var error: AppError?
     var editingRoute: TestRoute?
 
-    private(set) var isConnecting = false
-
-    /// Derived from the engine so the indicator never contradicts the transport.
-    func status(engine: SimulationEngine) -> SessionStatus {
-        if let failure = engine.lastError { return .error(failure.title) }
-        if isConnecting { return .connecting }
-        switch engine.phase {
-        case .running: return .running
-        case .paused: return .paused
-        case .idle, .finished: return engine.fix == nil ? .disconnected : .connected
-        }
-    }
-
     func focus(on coordinate: CLLocationCoordinate2D, span: CLLocationDegrees = 0.02, animated: Bool = true) {
         let region = MKCoordinateRegion(center: coordinate,
                                         span: MKCoordinateSpan(latitudeDelta: span, longitudeDelta: span))
@@ -72,13 +55,6 @@ final class MainViewModel {
 
     func present(_ error: AppError) {
         self.error = error
-    }
-
-    /// Brief connecting state so the indicator reflects work starting.
-    func beginSession() async {
-        isConnecting = true
-        try? await Task.sleep(for: .milliseconds(250))
-        isConnecting = false
     }
 }
 

@@ -25,12 +25,6 @@ final class SimulationViewModel {
         engine.start()
     }
 
-    func run(scenario: TestScenario) {
-        guard let route = scenario.route else { return }
-        engine.speedMultiplier = scenario.speedMultiplier
-        run(route: route)
-    }
-
     func load(route: TestRoute) {
         engine.load(RouteSnapshot(route: route))
     }
@@ -46,7 +40,7 @@ final class SimulationViewModel {
     func stop() { engine.stop() }
     func restart() { engine.restart() }
 
-    /// Returns the test session to its default state: no route, no simulated fix.
+    /// Drops any loaded route and its position.
     func resetSession() {
         engine.clear()
         engine.speedMultiplier = 1

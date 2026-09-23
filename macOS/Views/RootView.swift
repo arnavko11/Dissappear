@@ -5,7 +5,6 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
     case devices = "Devices"
     case locations = "Locations"
     case routes = "Routes"
-    case scenarios = "Scenarios"
     case build = "Build"
     case settings = "Settings"
 
@@ -17,7 +16,6 @@ enum SidebarSection: String, CaseIterable, Identifiable, Hashable {
         case .devices: return "iphone.gen3"
         case .locations: return "mappin.and.ellipse"
         case .routes: return "point.topleft.down.to.point.bottomright.curvepath"
-        case .scenarios: return "list.bullet.rectangle"
         case .build: return "hammer"
         case .settings: return "gearshape"
         }
@@ -49,7 +47,7 @@ struct RootView: View {
         NavigationSplitView {
             List(selection: $selection) {
                 Section("Spoofing") {
-                    ForEach([SidebarSection.setup, .devices, .locations, .routes, .scenarios]) { section in
+                    ForEach([SidebarSection.setup, .devices, .locations, .routes]) { section in
                         Label(section.rawValue, systemImage: section.symbol).tag(section)
                     }
                 }
@@ -67,7 +65,6 @@ struct RootView: View {
             case .devices: DevicesView()
             case .locations: LocationsView()
             case .routes: RoutesView()
-            case .scenarios: ScenariosView()
             case .build: BuildView()
             case .settings: SettingsView()
             }

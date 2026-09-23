@@ -50,6 +50,16 @@ is a double free; reading it is a use-after-free. Confirmed from the Rust source
 When touching `OnDeviceSpoofing.swift`, check the FFI source rather than
 inferring ownership from the C signature.
 
+**Export a fresh pairing, never the Mac's own record.** `lockdown
+save-pair-record` hands back what usbmuxd holds, which lacks the `EscrowBag`,
+and the phone then hangs up (EPIPE) on every on-device session. The export
+pairs again under a new HostID (`PairingRecordService.pairScript`); reusing the
+Mac's HostID would replace the Mac's own trust on the phone.
+
+**Phone↔Mac pairing is automatic.** `POST /pair` is the only unauthenticated
+endpoint; the Mac shows Allow/Don't Allow and returns the code. No address or
+code UI exists on either side — don't add it back.
+
 **The loopback VPN is a separate app.** StosVPN or LocalDevVPN. A
 `NEPacketTunnelProvider` of our own needs the NetworkExtension entitlement,
 which free personal teams cannot enable — which is why SideStore ships StosVPN

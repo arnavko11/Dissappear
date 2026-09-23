@@ -1,9 +1,10 @@
 import MapKit
 import SwiftUI
 
-struct TestMapView: View {
+struct SpoofMapView: View {
     @Environment(MainViewModel.self) private var main
     @Environment(SimulationEngine.self) private var engine
+    @Environment(SpoofingCoordinator.self) private var spoofing
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(PreferenceKey.mapStyle) private var mapStyleRaw = MapStyleOption.standard.rawValue
     @AppStorage(PreferenceKey.smoothMarker) private var smoothMarker = true
@@ -34,8 +35,8 @@ struct TestMapView: View {
                 main.visibleRegion = context.region
             }
         }
-        .accessibilityLabel("Test map")
-        .accessibilityValue(engine.fix.map { "Simulated location \(CoordinateParser.format($0.coordinate))" } ?? "No simulated location")
+        .accessibilityLabel("Map")
+        .accessibilityValue(engine.fix.map { "Spoofed location \(CoordinateParser.format($0.coordinate))" } ?? "No spoofed location")
     }
 
     private var style: MapStyleOption {
@@ -73,8 +74,15 @@ struct TestMapView: View {
 
     @MapContentBuilder
     private var simulatedMarker: some MapContent {
+        if engine.fix == nil, let spoofed = spoofing.displayed {
+            Annotation("Spoofed location",
+                       coordinate: CLLocationCoordinate2D(latitude: spoofed.latitude, longitude: spoofed.longitude)) {
+                SimulatedFixMarker(course: 0, isMoving: false)
+            }
+            .annotationTitles(.hidden)
+        }
         if let fix = engine.fix {
-            Annotation("Simulated location", coordinate: fix.coordinate) {
+            Annotation("Spoofed location", coordinate: fix.coordinate) {
                 SimulatedFixMarker(course: fix.course, isMoving: engine.phase == .running)
                     .animation(animation, value: fix)
             }
@@ -128,6 +136,6 @@ private struct SimulatedFixMarker: View {
                 .overlay(Circle().strokeBorder(.background, lineWidth: 2))
                 .rotationEffect(isMoving ? .degrees(course) : .zero)
         }
-        .accessibilityLabel("Simulated location")
+        .accessibilityLabel("Spoofed location")
     }
 }

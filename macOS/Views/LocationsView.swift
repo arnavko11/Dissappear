@@ -57,7 +57,7 @@ struct DeviceLocationBar: View {
             HStack(spacing: 10) {
                 StatusDot(state: model.deviceLocation == nil ? .inactive : .good)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(model.deviceLocation == nil ? "Device using real location" : "Device location simulated")
+                    Text(model.deviceLocation == nil ? "Device using real location" : "Device location spoofed")
                         .font(.callout)
                     Text(statusDetail)
                         .font(.caption)
@@ -116,7 +116,7 @@ private struct AddLocationSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            SectionHeader(title: "New Location", subtitle: "Coordinates used by the iOS test app's simulation engine.")
+            SectionHeader(title: "New Location", subtitle: "Saved spots you can spoof the iPhone to.")
             Form {
                 TextField("Name", text: $name)
                 TextField("Latitude", text: $latitude)

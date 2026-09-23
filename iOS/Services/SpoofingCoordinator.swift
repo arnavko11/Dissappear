@@ -79,36 +79,64 @@ final class SpoofingCoordinator {
         return nil
     }
 
+    /// What this app last put on the device, shown on the main screen.
+    struct Spoofed: Equatable {
+        var latitude: Double
+        var longitude: Double
+        var name: String?
+    }
+
+    private(set) var current: Spoofed?
+    /// The last failure, by either route, for the main screen to show.
+    var lastFailure: String?
+    /// A change is on its way to the device.
+    private(set) var isWorking = false
+
     func spoof(latitude: Double, longitude: Double, name: String?) async {
+        isWorking = true
+        defer { isWorking = false }
         switch route {
         case .onDevice:
             do {
                 try await onDevice().spoof(latitude: latitude, longitude: longitude)
                 hasPushedOnDevice = true
                 lastOnDeviceFailure = nil
+                lastFailure = nil
+                current = Spoofed(latitude: latitude, longitude: longitude, name: name)
             } catch {
                 lastOnDeviceFailure = error.localizedDescription
+                lastFailure = error.localizedDescription
             }
         case .companion:
-            await client.setLocation(latitude: latitude, longitude: longitude, name: name)
-        case .unavailable:
-            break
+            if await client.setLocation(latitude: latitude, longitude: longitude, name: name) {
+                lastFailure = nil
+                current = Spoofed(latitude: latitude, longitude: longitude, name: name)
+            } else {
+                lastFailure = client.lastError ?? "The Mac companion did not apply the location."
+            }
+        case let .unavailable(reason):
+            lastFailure = reason
         }
     }
 
     func clear() async {
         isCompanionPlayingRoute = false
+        isWorking = true
+        defer { isWorking = false }
         switch route {
         case .onDevice:
             do {
                 try await onDevice().clear()
                 hasPushedOnDevice = false
                 lastOnDeviceFailure = nil
+                current = nil
             } catch {
                 lastOnDeviceFailure = error.localizedDescription
+                lastFailure = error.localizedDescription
             }
         case .companion:
             await client.clearLocation()
+            if client.trouble == nil { current = nil } else { lastFailure = client.lastError }
         case .unavailable:
             break
         }
@@ -121,7 +149,20 @@ final class SpoofingCoordinator {
     /// Whether a location is currently in force on the device, by either
     /// route. Stopping has to stay available even when the local clock is
     /// idle, because the device can be spoofed without one running.
+    /// Where the device is being told it is: this app's last change, or what
+    /// the Mac reports when the change was made there.
+    var displayed: Spoofed? {
+        if let status = client.status, route == .companion {
+            return status.simulating
+                ? Spoofed(latitude: status.latitude, longitude: status.longitude,
+                          name: status.name.isEmpty ? nil : status.name)
+                : nil
+        }
+        return current
+    }
+
     var isSpoofing: Bool {
+        if current != nil { return true }
         if isCompanionPlayingRoute { return true }
         if client.status?.simulating == true { return true }
         return hasPushedOnDevice

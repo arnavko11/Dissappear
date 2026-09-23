@@ -45,7 +45,7 @@ struct FreeProvisioningService {
         } else {
             appID = try await client.addAppID(teamID: team.id,
                                               identifier: bundleIdentifier,
-                                              name: "Dissappear Location Tester")
+                                              name: "Dissappear")
         }
 
         // 4. Download the profile Apple generates for that App ID and team.
