@@ -64,43 +64,34 @@ final class PairingRecordStore {
     /// with the old one can let it go.
     var onRecordChanged: (() -> Void)?
 
-    /// What a record has to contain before it is worth keeping.
-    ///
-    /// These are the keys idevice insists on. Checking them here turns a
-    /// malformed export into a message at import, rather than a broken pipe
-    /// three steps later when the device hangs up on the session.
     enum ImportFailure: LocalizedError {
         case notARecord
-        case missingKeys([String])
-        case noEscrowBag
+        case noRemotePairing
 
         var errorDescription: String? {
             switch self {
             case .notARecord:
                 return "That file is not a pairing record."
-            case let .missingKeys(keys):
-                return "That pairing record is missing \(keys.joined(separator: ", ")). Export Pairing Record again from the Mac companion."
-            case .noEscrowBag:
-                return "That record is a copy of the Mac's own pairing, which macOS gives out without the escrow bag — and without it the iPhone hangs up on every session. Update the Mac companion, then Export Pairing Record again with the iPhone plugged in and unlocked, and tap Trust. The new export pairs fresh and includes it."
+            case .noRemotePairing:
+                return "That record was made by an older Mac companion and lacks the remote pairing this iPhone checks. Update the companion, plug the iPhone in, choose Export Pairing Record, tap Trust, and import the new file."
             }
         }
     }
 
+    /// The phone reaches itself through RemotePairing, so the record must
+    /// carry an Ed25519 key pair and the identifier it was paired under —
+    /// the keys idevice's `RpPairingFile` reads. The lockdown half that
+    /// travels in the same file is not needed here.
     private static func validate(_ data: Data) throws {
         guard let plist = try? PropertyListSerialization
             .propertyList(from: data, format: nil) as? [String: Any] else {
             throw ImportFailure.notARecord
         }
-
-        let required = ["DeviceCertificate", "HostPrivateKey", "HostCertificate",
-                        "RootPrivateKey", "RootCertificate",
-                        "SystemBUID", "HostID", "WiFiMACAddress"]
-        let missing = required.filter { plist[$0] == nil }
-        guard missing.isEmpty else { throw ImportFailure.missingKeys(missing) }
-
-        // Optional to idevice, but without it the device refuses a session
-        // while locked — which is most of the time, and reads as a mystery.
-        guard plist["EscrowBag"] != nil else { throw ImportFailure.noEscrowBag }
+        guard (plist["public_key"] as? Data)?.count == 32,
+              (plist["private_key"] as? Data)?.count == 32,
+              plist["identifier"] is String else {
+            throw ImportFailure.noRemotePairing
+        }
     }
 
     func removeRecord() {

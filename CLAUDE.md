@@ -50,19 +50,19 @@ is a double free; reading it is a use-after-free. Confirmed from the Rust source
 When touching `OnDeviceSpoofing.swift`, check the FFI source rather than
 inferring ownership from the C signature.
 
-**Export a fresh pairing, never the Mac's own record.** `lockdown
-save-pair-record` hands back what usbmuxd holds, which lacks the `EscrowBag`,
-and the phone then hangs up (EPIPE) on every on-device session. The export
-pairs again under a new HostID (`PairingRecordService.pairScript`); reusing the
-Mac's HostID would replace the Mac's own trust on the phone.
+**On device, use RemotePairing on 49152 — not lockdown.** Over the loopback
+VPN, lockdownd hangs up (EPIPE) on CoreDeviceProxy whatever the record, escrow
+bag or `EnableWifiConnections`: three rounds were lost learning that. The phone
+calls `tunnel_create_rppairing` at `10.7.0.1:49152` with an `RpPairingFile`
+(`public_key`, `private_key`, `identifier`), exactly as StikDebug does. That
+record can only be made over USB, through the trusted CoreDeviceProxy tunnel's
+untrusted tunnelservice; `PairingRecordService.pairScript` does it with
+pymobiledevice3 and writes it alongside the lockdown record, as iloader does.
+When the on-device path breaks, compare with StikDebug's `IdeviceFFIBridge.swift`
+before theorising.
 
-**The loopback VPN counts as a network connection.** lockdownd refuses
-network sessions unless `EnableWifiConnections` is on, and drops network hosts
-that stop answering its heartbeat. So the Mac switches that setting on for
-every phone it sees (and at export), and the phone runs a `Heartbeat` thread
-before anything else. The app also keeps itself alive in the background with
-location updates while spoofing on-device: suspended, the heartbeat stops and
-the spoof ends.
+The app keeps itself alive in the background with location updates while
+spoofing on-device: suspended, its connection dies and the spoof ends.
 
 **Phone↔Mac pairing is automatic.** `POST /pair` is the only unauthenticated
 endpoint; the Mac shows Allow/Don't Allow and returns the code. No address or

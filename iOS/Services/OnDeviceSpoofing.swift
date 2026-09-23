@@ -13,7 +13,7 @@ import Network
 /// 2. **A loopback VPN.** An app may not reach its own device's services
 ///    directly, so a separate app (StosVPN or LocalDevVPN) publishes a local
 ///    address that routes back to this device. We connect to that.
-/// 3. **idevice.** The Rust client, linked in, which speaks lockdown, RSD and
+/// 3. **idevice.** The Rust client, linked in, which speaks RemotePairing, RSD and
 ///    DVT well enough to ask for a coordinate to be simulated.
 ///
 /// Nothing here is a jailbreak or a patch to iOS: it is the developer pathway
@@ -33,15 +33,13 @@ final class OnDeviceSpoofing {
                 return "No pairing record has been imported. Export one from the Mac companion under Devices, then import it here."
             case let .recordRejected(detail):
                 return """
-                The iPhone hung up on this app, so it would not open a session \
-                with the imported pairing record. In order:
+                The iPhone refused this pairing record.
 
-                1. Plug the iPhone into the Mac with Dissappear Companion open \
-                (latest version) for a few seconds. It switches on network \
-                connections, which the loopback VPN needs — the usual cause.
-                2. Keep the iPhone unlocked and try again.
-                3. Still failing: Export Pairing Record on the Mac again, tap \
-                Trust, and import the new file here.
+                Update the Mac companion, plug the iPhone in, choose Export \
+                Pairing Record, tap Trust on the iPhone, and import the new \
+                file here. Records made before this version lack the part the \
+                iPhone checks, and any record expires after an iOS update or \
+                reset.
 
                 \(detail)
                 """
@@ -60,22 +58,23 @@ final class OnDeviceSpoofing {
     /// guess here should be one field to correct rather than a new build.
     static let defaultLoopbackAddress = "10.7.0.1"
 
-    /// lockdownd's port, which the loopback VPN routes back to this device.
-    static let lockdownPort: UInt16 = 62078
+    /// remotepairingd's port. Lockdown (62078) is the obvious door and the
+    /// wrong one: over the loopback VPN, lockdownd hangs up on CoreDeviceProxy
+    /// with a broken pipe. RemotePairing here is what StikDebug and iloader
+    /// use, and it reaches the same developer services.
+    static let pairingPort: UInt16 = 49152
 
     private let pairingRecordURL: URL
     private let loopbackAddress: String
 
     /// The open chain, kept between calls.
     ///
-    /// Building it takes seconds — a lockdown connection, a tunnel and an RSD
+    /// Building it takes seconds — pair-verify, a tunnel and an RSD
     /// handshake — so doing it per coordinate made a route impossible and
     /// every change sluggish. It is torn down on failure and rebuilt.
     private var session: Session?
-    private var heartbeat: Heartbeat?
 
     private struct Session {
-        var provider: OpaquePointer?
         var adapter: OpaquePointer?
         var handshake: OpaquePointer?
         var server: OpaquePointer?
@@ -87,7 +86,6 @@ final class OnDeviceSpoofing {
             remote_server_free(server)
             rsd_handshake_free(handshake)
             adapter_free(adapter)
-            idevice_provider_free(provider)
         }
     }
 
@@ -96,7 +94,7 @@ final class OnDeviceSpoofing {
         self.loopbackAddress = loopbackAddress
     }
 
-    /// Whether the loopback VPN is up and lockdownd is answering through it.
+    /// Whether the loopback VPN is up and remotepairingd is answering through it.
     ///
     /// Worth its own check: without it every failure below looks the same, and
     /// the commonest cause by far is simply that the VPN is switched off.
@@ -104,7 +102,7 @@ final class OnDeviceSpoofing {
         await withCheckedContinuation { continuation in
             let connection = NWConnection(
                 host: NWEndpoint.Host(loopbackAddress),
-                port: NWEndpoint.Port(rawValue: Self.lockdownPort) ?? 62078,
+                port: NWEndpoint.Port(rawValue: Self.pairingPort) ?? 49152,
                 using: .tcp)
 
             let finished = OnceFlag()
@@ -151,8 +149,6 @@ final class OnDeviceSpoofing {
     func closeSession() {
         session?.close()
         session = nil
-        heartbeat?.stop()
-        heartbeat = nil
     }
 
     /// Runs `body` against the open session, opening one if needed.
@@ -189,18 +185,6 @@ final class OnDeviceSpoofing {
             throw Failure.noLoopback(loopbackAddress)
         }
 
-        // The heartbeat first: it is the smallest thing that needs a
-        // lockdown session, so if the phone will not accept this record, the
-        // failure is named here rather than three steps later.
-        let beat = Heartbeat()
-        do {
-            try await beat.start(pairingRecordPath: pairingRecordURL.path, address: try socketAddress())
-        } catch let failure as HeartbeatError {
-            throw Self.classify("Starting a lockdown session failed: \(failure.message)")
-        }
-        heartbeat?.stop()
-        heartbeat = beat
-
         var partial = Session()
         // Anything built before a throw still has to be released; success
         // hands the whole lot to `session` and clears this.
@@ -208,50 +192,26 @@ final class OnDeviceSpoofing {
         defer { if !keep { partial.close() } }
 
         var pairing: OpaquePointer?
-        try Self.check(idevice_pairing_file_read(pairingRecordURL.path, &pairing),
+        try Self.check(rp_pairing_file_read(pairingRecordURL.path, &pairing),
                        context: "Reading the pairing record")
+        // Borrowed by the tunnel, so still ours to free.
+        defer { rp_pairing_file_free(pairing) }
 
-        var providerError: UnsafeMutablePointer<IdeviceFfiError>?
+        // Pair-verify with the record, then a userspace tunnel with the RSD
+        // handshake done — no root and no tunnel interface, in one call.
+        var tunnelError: UnsafeMutablePointer<IdeviceFfiError>?
         try withSocketAddress { address in
-            // The provider takes the pairing file, success or failure, so it
-            // is not ours to free from here on.
-            providerError = idevice_tcp_provider_new(address, pairing, "Dissappear", &partial.provider)
+            tunnelError = tunnel_create_rppairing(address, socklen_t(MemoryLayout<sockaddr_in>.size),
+                                                  "Dissappear", pairing, nil, nil,
+                                                  &partial.adapter, &partial.handshake)
         }
-        try Self.check(providerError, context: "Connecting to this device")
-
-        var proxy: OpaquePointer?
-        try Self.check(core_device_proxy_connect(partial.provider, &proxy),
-                       context: "Opening the device proxy")
-
-        // Read the port before the adapter is made: creating the adapter
-        // takes the proxy, and reading it afterwards is a use-after-free.
-        var rsdPort: UInt16 = 0
-        do {
-            try Self.check(core_device_proxy_get_server_rsd_port(proxy, &rsdPort),
-                           context: "Finding the service port")
-        } catch {
-            core_device_proxy_free(proxy)
-            throw error
-        }
-
-        // A userspace TCP stack, so no tunnel interface and no root — the
-        // whole reason this can run inside an ordinary sideloaded app. It
-        // takes the proxy with it.
-        try Self.check(core_device_proxy_create_tcp_adapter(proxy, &partial.adapter),
-                       context: "Creating the tunnel")
-
-        var stream: OpaquePointer?
-        try Self.check(adapter_connect(partial.adapter, rsdPort, &stream),
-                       context: "Connecting to the service port")
-
-        // The handshake takes the stream.
-        try Self.check(rsd_handshake_new(stream, &partial.handshake),
-                       context: "Handshaking with the device")
+        try Self.check(tunnelError, context: "Opening the tunnel")
 
         // Borrows the adapter and the handshake, so both are still ours.
         try Self.check(remote_server_connect_rsd(partial.adapter, partial.handshake, &partial.server),
                        context: "Opening the developer server")
 
+        // Borrows the server, which therefore has to outlive the client.
         try Self.check(location_simulation_new(partial.server, &partial.client),
                        context: "Opening the location service")
 
@@ -263,7 +223,7 @@ final class OnDeviceSpoofing {
     private func socketAddress() throws -> sockaddr_in {
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = Self.lockdownPort.bigEndian   // lockdownd
+        address.sin_port = Self.pairingPort.bigEndian
         address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
 
         guard inet_pton(AF_INET, loopbackAddress, &address.sin_addr) == 1 else {
@@ -307,11 +267,15 @@ final class OnDeviceSpoofing {
         let lower = detail.lowercased()
 
         // A broken pipe means the device accepted the connection and then hung
-        // up, which is lockdownd refusing the session rather than anything
+        // up, which is the device refusing the session rather than anything
         // wrong with the network — so saying "could not reach" would send the
         // user looking in the wrong place entirely.
         if lower.contains("broken pipe") || lower.contains("os code 32")
             || lower.contains("connection reset") || lower.contains("eof") {
+            return Failure.recordRejected(detail)
+        }
+        if lower.contains("verify") || lower.contains("not paired") || lower.contains("unauthori")
+            || lower.contains("signature") || lower.contains("missing field") {
             return Failure.recordRejected(detail)
         }
 

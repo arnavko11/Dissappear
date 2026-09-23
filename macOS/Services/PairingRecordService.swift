@@ -41,16 +41,11 @@ struct PairingRecordService {
 
         try? FileManager.default.removeItem(at: destination)
 
-        // A fresh pairing, not a copy of the Mac's own record. macOS hands out
-        // its record without the escrow bag, and without that the phone hangs
-        // up on every session opened while it is locked — the broken pipe the
-        // on-device path kept hitting. Pairing under a new host ID also leaves
-        // the Mac's own trust untouched; the phone asks to Trust once more.
         onOutputLine("Tap Trust on the iPhone when it asks.")
         let result = try await runner.run(
             Self.interpreter(for: tool.executablePath),
             ["-c", Self.pairScript, device.udid, destination.path],
-            timeout: .seconds(180),
+            timeout: .seconds(240),
             onOutputLine: onOutputLine)
 
         guard result.succeeded else {
@@ -106,30 +101,50 @@ struct PairingRecordService {
         return result?.succeeded ?? false
     }
 
-    /// Pairs under a fresh host ID and writes the record, escrow bag and all.
-    /// The cache folder is a temporary one so pymobiledevice3's own record is
-    /// left alone.
+    /// Writes the file the phone spoofs itself with: the lockdown record plus
+    /// a remote pairing (`public_key`, `private_key`, `identifier`) — the same
+    /// layout iloader produces for StikDebug.
+    ///
+    /// The phone does not use lockdown to reach itself: over the loopback VPN,
+    /// lockdownd hangs up on CoreDeviceProxy (the broken pipe). What works is
+    /// RemotePairing on port 49152, which needs this second half. It can only
+    /// be made over USB, through the trusted CoreDeviceProxy tunnel, and the
+    /// phone asks to Trust once.
     static let pairScript = """
-    import asyncio, plistlib, sys, tempfile, uuid
+    import asyncio, plistlib, sys
     from pathlib import Path
     from pymobiledevice3.lockdown import create_using_usbmux
+    from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
+    from pymobiledevice3.remote.tunnel_service import create_core_device_tunnel_service_using_rsd
 
     async def main(udid, out):
-        with tempfile.TemporaryDirectory() as cache:
-            ld = await create_using_usbmux(serial=udid, autopair=False, pairing_records_cache_folder=Path(cache))
-            ld.pair_record = None
-            ld.host_id = str(uuid.uuid4()).upper()
-            await ld.pair(timeout=120)
-            # The phone reaches itself through the loopback VPN, which lockdownd
-            # treats as a network connection, and it refuses network sessions
-            # unless Wi-Fi connections are on - the broken pipe on the phone.
-            if await ld.validate_pairing():
-                await ld.set_enable_wifi_connections(True)
-            record = dict(ld.pair_record)
-            record["UDID"] = udid
-            if "EscrowBag" not in record:
-                sys.exit("The iPhone paired but returned no escrow bag. Unlock it and export again.")
-            Path(out).write_bytes(plistlib.dumps(record))
+        ld = await create_using_usbmux(serial=udid)
+        combined = dict(ld.pair_record or {})
+        combined["UDID"] = udid
+        for key in ("EnableWifiConnections", "EnableWifiDebugging"):
+            try:
+                await ld.set_value(True, "com.apple.mobile.wireless_lockdown", key)
+            except Exception as error:
+                print(f"Could not set {key}: {error}", file=sys.stderr)
+
+        print("Tap Trust on the iPhone if it asks.", flush=True)
+        async with UserspaceRsdTunnel(serial=udid) as rsd:
+            service = await create_core_device_tunnel_service_using_rsd(rsd, autopair=True)
+            record = service.pair_record
+            identifier = service.identifier
+            try:
+                await service.close()
+            except Exception:
+                pass
+
+        if not record or "private_key" not in record:
+            sys.exit("The iPhone did not finish remote pairing. Unlock it, tap Trust, and export again.")
+        combined["public_key"] = record["public_key"]
+        combined["private_key"] = record["private_key"]
+        combined["identifier"] = identifier
+        if record.get("peer_alt_irk"):
+            combined["alt_irk"] = record["peer_alt_irk"]
+        Path(out).write_bytes(plistlib.dumps(combined))
 
     asyncio.run(main(sys.argv[1], sys.argv[2]))
     """
