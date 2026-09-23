@@ -89,7 +89,23 @@ final class SpoofingCoordinator {
 
     private(set) var current: Spoofed?
     /// The last failure, by either route, for the main screen to show.
-    var lastFailure: String?
+    var lastFailure: String? {
+        didSet {
+            guard let lastFailure else { return }
+            failureLog.append("\(Date.now.formatted(date: .omitted, time: .standard)) [\(routeName)] \(lastFailure)")
+            if failureLog.count > 10 { failureLog.removeFirst(failureLog.count - 10) }
+        }
+    }
+    /// Recent failures, newest last, for Copy Diagnostics.
+    private(set) var failureLog: [String] = []
+
+    var routeName: String {
+        switch route {
+        case .onDevice: return "on-device"
+        case .companion: return "mac"
+        case .unavailable: return "unavailable"
+        }
+    }
     /// A change is on its way to the device.
     private(set) var isWorking = false
 

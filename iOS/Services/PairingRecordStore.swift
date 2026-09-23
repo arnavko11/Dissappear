@@ -54,6 +54,15 @@ final class PairingRecordStore {
         }
     }
 
+    /// The stored record's key names — never the values, which are secrets —
+    /// so diagnostics can say what the record carries.
+    var recordKeys: [String] {
+        guard let data = try? Data(contentsOf: Self.url),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return [] }
+        return plist.keys.sorted()
+    }
+
     /// Why a record the Mac placed could not be used.
     var lastPickUpFailure: String?
 

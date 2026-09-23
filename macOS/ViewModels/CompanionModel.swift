@@ -61,6 +61,8 @@ final class CompanionModel: ObservableObject {
         didSet { Preferences.projectPath = configuration.projectPath }
     }
     @Published var error: CompanionError?
+    /// Result of the last pairing export, shown under the button.
+    @Published var pairingRecordNotice: String?
     @Published private(set) var isBusy = false
 
     private let toolchainService = ToolchainService()
@@ -759,9 +761,6 @@ extension CompanionModel {
             self.error = .generic("Exporting the pairing record failed", error)
         }
     }
-
-    /// Result of the last export, shown under the button.
-    @Published var pairingRecordNotice: String?
 
     /// One click: pairs, and writes the record straight into the iPhone app.
     /// The file only passes through a temporary folder — it is a credential,

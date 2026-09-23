@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// How this phone gets spoofed, and everything needed to set that up, in one
 /// place reached from the status chip on the map.
@@ -9,6 +10,7 @@ struct ConnectionView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var isImportingRecord = false
     @State private var importFailure: String?
+    @State private var copied = false
 
     var body: some View {
         Form {
@@ -61,6 +63,17 @@ struct ConnectionView: View {
             } footer: {
                 Text("Found automatically on the same Wi-Fi — click Allow on the Mac the first time. iOS gives apps no way to talk through the cable, so this uses the local network even while plugged in.")
             }
+
+            Section {
+                Button {
+                    UIPasteboard.general.string = diagnostics
+                    copied = true
+                } label: {
+                    Label(copied ? "Copied" : "Copy Diagnostics", systemImage: "doc.on.doc")
+                }
+            } footer: {
+                Text("Copies what the app knows about the connection and the last failures, with the exact step that failed. Paste it when reporting a problem. It never includes the pairing record's keys.")
+            }
         }
         .navigationTitle("Connection")
         .navigationBarTitleDisplayMode(.inline)
@@ -105,5 +118,23 @@ struct ConnectionView: View {
             guard let name = client.discovered?.name else { return "Searching…" }
             return client.isConnected ? name : "\(name) — not answering"
         }
+    }
+
+    private var diagnostics: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        var lines = [
+            "Dissappear \(info["CFBundleShortVersionString"] as? String ?? "?") (\(info["CFBundleVersion"] as? String ?? "?"))",
+            "iOS \(UIDevice.current.systemVersion), \(UIDevice.current.model)",
+            "Route: \(spoofing.routeName)",
+            "Unavailable reason: \(spoofing.unavailableReason ?? "none")",
+            "Loopback: \(spoofing.loopbackAddress):\(OnDeviceSpoofing.pairingPort) reachable=\(spoofing.isLoopbackReachable)",
+            "Pairing record: \(pairingRecords.hasRecord ? "present" : "none"), keys: \(pairingRecords.recordKeys.joined(separator: ", "))",
+            "Record pick-up failure: \(pairingRecords.lastPickUpFailure ?? "none")",
+            "Mac: \(macDescription), connected=\(client.isConnected), ready=\(client.status?.ready ?? false)",
+            "Last on-device failure: \(spoofing.lastOnDeviceFailure ?? "none")",
+            "Recent failures:"
+        ]
+        lines += spoofing.failureLog.isEmpty ? ["  none"] : spoofing.failureLog.map { "  " + $0 }
+        return lines.joined(separator: "\n")
     }
 }
