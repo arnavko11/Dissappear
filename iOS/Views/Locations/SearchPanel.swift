@@ -137,18 +137,11 @@ struct SearchPanel: View {
             }
 
             Section {
-                Toggle("Drop Pin on Tap", isOn: dropPinBinding)
-                    .accessibilityHint("Tap the map to place a test pin")
             } footer: {
-                Text("Search uses Apple Maps. Simulated locations stay inside this app.")
+                Text("Tip: tap anywhere on the map to drop a pin there.")
             }
         }
         .listStyle(.insetGrouped)
-    }
-
-    private var dropPinBinding: Binding<Bool> {
-        Binding(get: { main.tapMode == .dropPin },
-                set: { main.tapMode = $0 ? .dropPin : .inspect })
     }
 
     private func select(_ place: PlaceResult) {

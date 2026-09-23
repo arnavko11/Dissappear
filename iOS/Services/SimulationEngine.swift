@@ -65,8 +65,8 @@ final class SimulationEngine {
 
     func start() {
         guard let route, route.isRunnable else {
-            lastError = AppError(title: "Nothing to Simulate",
-                                 message: "Select a route or scenario with at least two waypoints first.")
+            lastError = AppError(title: "Nothing to Play",
+                                 message: "Pick a route with at least two waypoints first.")
             return
         }
         guard phase != .running else { return }

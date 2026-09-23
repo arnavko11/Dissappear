@@ -5,7 +5,7 @@ struct SpeedControl: View {
 
     var body: some View {
         Menu {
-            Picker("Simulation Speed", selection: $speed) {
+            Picker("Route Speed", selection: $speed) {
                 ForEach(SimulationSpeed.allCases) { option in
                     Text(option.title).tag(option)
                 }
@@ -18,7 +18,7 @@ struct SpeedControl: View {
         }
         .menuStyle(.button)
         .buttonStyle(.bordered)
-        .accessibilityLabel("Simulation speed")
+        .accessibilityLabel("Route speed")
         .accessibilityValue(speed.title)
     }
 }

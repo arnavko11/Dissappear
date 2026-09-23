@@ -139,9 +139,9 @@ struct SetupGuideView: View {
                 detail: model.controlServerAddress.map { "Listening on \($0)" }
                     ?? "Remote control lets the phone in your pocket steer the spoofed location while the Mac stays home.",
                 isDone: model.isControlServerRunning,
-                instructions: model.controlServerCode.map {
-                    "In the Dissappear app on your iPhone, open Remote and enter the pairing code \($0)."
-                },
+                instructions: model.isControlServerRunning
+                    ? "Open Dissappear on your iPhone on the same Wi-Fi. It finds this Mac and asks here to be allowed."
+                    : nil,
                 action: model.isControlServerRunning
                     ? nil
                     : .init(title: "Turn On", run: { model.startControlServer() }))

@@ -257,7 +257,7 @@
 				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/Vendor/idevice/ios-simulator";
 				OTHER_LDFLAGS = "-lidevice_ffi";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Location access is used to compare real device fixes with simulated test fixes.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connects to the macOS companion on your network so this app can steer the simulated location.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Finds Dissappear Companion on your Mac so it can spoof this iPhone's location. iOS apps cannot talk through the cable, so this uses Wi-Fi.";
 				INFOPLIST_FILE = "Config/iOS-Info.plist";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "iOS/Support/Dissappear-Bridging-Header.h";
@@ -290,7 +290,7 @@
 				"LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]" = "$(SRCROOT)/Vendor/idevice/ios-simulator";
 				OTHER_LDFLAGS = "-lidevice_ffi";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Location access is used to compare real device fixes with simulated test fixes.";
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connects to the macOS companion on your network so this app can steer the simulated location.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Finds Dissappear Companion on your Mac so it can spoof this iPhone's location. iOS apps cannot talk through the cable, so this uses Wi-Fi.";
 				INFOPLIST_FILE = "Config/iOS-Info.plist";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "iOS/Support/Dissappear-Bridging-Header.h";

@@ -41,21 +41,34 @@ struct PairingRecordService {
 
         try? FileManager.default.removeItem(at: destination)
 
+        // A fresh pairing, not a copy of the Mac's own record. macOS hands out
+        // its record without the escrow bag, and without that the phone hangs
+        // up on every session opened while it is locked — the broken pipe the
+        // on-device path kept hitting. Pairing under a new host ID also leaves
+        // the Mac's own trust untouched; the phone asks to Trust once more.
+        onOutputLine("Tap Trust on the iPhone when it asks.")
         let result = try await runner.run(
-            tool.executablePath,
-            ["lockdown", "save-pair-record", destination.path, "--udid", device.udid],
+            Self.interpreter(for: tool.executablePath),
+            ["-c", Self.pairScript, device.udid, destination.path],
+            timeout: .seconds(180),
             onOutputLine: onOutputLine)
 
         guard result.succeeded else {
             let output = result.combinedOutput.lowercased()
-            if output.contains("pair") || output.contains("trust") || output.contains("lockdown") {
-                throw CompanionError(
-                    title: "The Device Is Not Paired With This Mac",
-                    details: "There is no pairing record to export.",
-                    recommendedAction: "Plug the iPhone in over USB, unlock it, and tap Trust when it asks about this Mac. Then export again.",
-                    technicalDetails: result.combinedOutput)
+            let action: String
+            if output.contains("denied") {
+                action = "You tapped Don't Trust. Export again and tap Trust."
+            } else if output.contains("pending") || output.contains("timeout") || output.contains("timed out") {
+                action = "The iPhone never answered the Trust prompt. Unlock it, export again, and tap Trust."
+            } else if output.contains("passwordprotected") || output.contains("escrow") {
+                action = "Unlock the iPhone, keep it unlocked, and export again."
+            } else {
+                throw CompanionError.fromToolOutput(stage: "Exporting the pairing record", result: result)
             }
-            throw CompanionError.fromToolOutput(stage: "Exporting the pairing record", result: result)
+            throw CompanionError(title: "The iPhone Did Not Pair",
+                                 details: "A pairing record is made by pairing with the phone, which needs it unlocked and a tap on Trust.",
+                                 recommendedAction: action,
+                                 technicalDetails: result.combinedOutput)
         }
 
         guard FileManager.default.fileExists(atPath: destination.path) else {
@@ -66,4 +79,42 @@ struct PairingRecordService {
                 technicalDetails: result.combinedOutput)
         }
     }
+
+    /// The Python that pymobiledevice3 runs under, read from its launcher so
+    /// the script imports the same installation.
+    static func interpreter(for executable: String) -> String {
+        if let handle = FileHandle(forReadingAtPath: executable),
+           let head = try? handle.read(upToCount: 512),
+           let line = String(data: head, encoding: .utf8)?.split(separator: "\n").first,
+           line.hasPrefix("#!") {
+            let path = line.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            if !path.contains(" "), FileManager.default.isExecutableFile(atPath: path) { return path }
+        }
+        let sibling = URL(fileURLWithPath: executable).deletingLastPathComponent()
+            .appendingPathComponent("python3").path
+        return FileManager.default.isExecutableFile(atPath: sibling) ? sibling : "/usr/bin/python3"
+    }
+
+    /// Pairs under a fresh host ID and writes the record, escrow bag and all.
+    /// The cache folder is a temporary one so pymobiledevice3's own record is
+    /// left alone.
+    static let pairScript = """
+    import asyncio, plistlib, sys, tempfile, uuid
+    from pathlib import Path
+    from pymobiledevice3.lockdown import create_using_usbmux
+
+    async def main(udid, out):
+        with tempfile.TemporaryDirectory() as cache:
+            ld = await create_using_usbmux(serial=udid, autopair=False, pairing_records_cache_folder=Path(cache))
+            ld.pair_record = None
+            ld.host_id = str(uuid.uuid4()).upper()
+            await ld.pair(timeout=120)
+            record = dict(ld.pair_record)
+            record["UDID"] = udid
+            if "EscrowBag" not in record:
+                sys.exit("The iPhone paired but returned no escrow bag. Unlock it and export again.")
+            Path(out).write_bytes(plistlib.dumps(record))
+
+    asyncio.run(main(sys.argv[1], sys.argv[2]))
+    """
 }

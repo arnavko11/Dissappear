@@ -120,44 +120,19 @@ struct SettingsView: View {
                     .buttonStyle(.borderedProminent)
                 }
 
-                if let address = model.controlServerAddress, let code = model.controlServerCode {
-                    LabeledContent("Address") {
-                        Text(address).textSelection(.enabled)
-                    }
-                    LabeledContent("Pairing Code") {
-                        HStack {
-                            Text(code).monospaced().textSelection(.enabled)
-                            Button("New Code") { model.regeneratePairingCode() }
-                        }
-                    }
+                if model.controlServerAddress != nil {
                     StatusRow(label: "Sleep",
                               value: model.isKeepingAwake ? "Staying awake" : "Normal",
                               state: model.isKeepingAwake ? .good : .inactive)
-
-                    if let remote = model.remoteAddress {
-                        LabeledContent("Away From Home") {
-                            Text("\(remote.hostName):\(model.controlServerAddress?.split(separator: ":").last.map(String.init) ?? "8787")")
-                                .textSelection(.enabled)
-                        }
-                        Text("\(remote.provider) is set up, so this address reaches the Mac from anywhere. That covers the controls only: the Mac still has to reach the iPhone it is spoofing, over USB or the same local network. Controlling a Mac from afar is useful when the phone being spoofed stays here with it — not for the phone in your pocket.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("A mesh VPN such as Tailscale on both devices lets the controls reach this Mac from anywhere, and its address will appear here. It does not extend the spoofing itself: the Mac reaches the iPhone over USB or the local network, so the phone being spoofed has to be here. Do not forward a router port to this server instead: it speaks plain HTTP and is meant for a private network.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text("Idle sleep is held off while a session is live. Closing the lid still sleeps the Mac unless it is plugged in with an external display, and this cannot stop sleep you ask for or a flat battery.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    Text("Enter these in the iOS app under Remote. Keep this Mac awake and the device connected — the simulation lasts only while this app holds the session.")
+                    Button("Forget Paired iPhones") { model.regeneratePairingCode() }
+                    Text("Open Dissappear on your iPhone on the same Wi-Fi. It finds this Mac by itself and asks here to be allowed — nothing to type.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
             } header: {
                 Text("Remote Control")
             } footer: {
-                Text("Serves the spoofing controls to your iPhone over the local network, so the Mac can stay put while you move. It is on by default. Requests must carry the pairing code, and nothing but the location controls is exposed. macOS asks permission the first time it uses the local network — allow it, or the phone will never find this Mac.")
+                Text("Lets the iPhone app drive this Mac's spoofing over the local network. The phone reaches the Mac over Wi-Fi even while the cable is plugged in — iOS gives apps no way to talk through the cable — so both apps ask for Local Network access once. Allow it on both.")
             }
 
             Section("About") {

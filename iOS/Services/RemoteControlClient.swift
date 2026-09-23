@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import Observation
+import UIKit
 
 /// Talks to the macOS companion over the local network so the phone can steer
 /// the simulated location while the Mac holds the developer session.
@@ -39,16 +40,23 @@ final class RemoteControlClient {
         var longitude: Double
     }
 
-    var host: String {
-        didSet { Self.store(host, forKey: "remoteHost") }
+    /// Handed over by the Mac when someone there approves this phone.
+    private(set) var pairingCode: String {
+        didSet { UserDefaults.standard.set(pairingCode, forKey: "remoteCode") }
     }
-    var port: String {
-        didSet { Self.store(port, forKey: "remotePort") }
-    }
-    var pairingCode: String {
-        didSet { Self.store(pairingCode, forKey: "remoteCode") }
+    /// The Mac this phone paired with, so it reconnects to the same one.
+    private var pairedName: String {
+        didSet { UserDefaults.standard.set(pairedName, forKey: "remoteName") }
     }
 
+    enum Pairing: Equatable {
+        case searching
+        case waitingForApproval(String)
+        case declined(String)
+        case paired
+    }
+
+    private(set) var pairing: Pairing = .searching
     private(set) var status: Status?
     private(set) var places: [SavedPlace] = []
     private(set) var lastError: String?
@@ -57,31 +65,85 @@ final class RemoteControlClient {
     /// Remembered so a lost session can be re-applied in one tap.
     private(set) var lastSent: (latitude: Double, longitude: Double, name: String?)?
 
-    /// Set when a companion was discovered on the network, so no address is
-    /// needed. Typed host and port remain as a fallback.
-    var discovered: RemoteDiscovery.Companion? {
-        didSet { if discovered != nil { lastError = nil } }
-    }
+    let discovery = RemoteDiscovery()
+    private(set) var discovered: RemoteDiscovery.Companion?
+    private var loop: Task<Void, Never>?
 
     init() {
-        host = UserDefaults.standard.string(forKey: "remoteHost") ?? ""
-        port = UserDefaults.standard.string(forKey: "remotePort") ?? "8787"
         pairingCode = UserDefaults.standard.string(forKey: "remoteCode") ?? ""
+        pairedName = UserDefaults.standard.string(forKey: "remoteName") ?? ""
     }
 
-    private static func store(_ value: String, forKey key: String) {
-        UserDefaults.standard.set(value, forKey: key)
+    /// Finds the Mac and keeps the connection current, with nothing for the
+    /// user to type. Runs for the life of the app.
+    func start() {
+        guard loop == nil else { return }
+        discovery.start()
+        loop = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.tick()
+                try? await Task.sleep(for: .seconds(4))
+            }
+        }
     }
 
-    var isConfigured: Bool {
-        guard !pairingCode.isEmpty else { return false }
-        return discovered != nil || !host.trimmingCharacters(in: .whitespaces).isEmpty
+    private func tick() async {
+        let companions = discovery.companions
+        // The Mac paired before, or — when there is exactly one — that one.
+        let pick = companions.first { $0.name == pairedName }
+            ?? (companions.count == 1 ? companions.first : nil)
+        guard let pick else {
+            discovered = nil
+            status = nil
+            if case .declined = pairing { return }
+            pairing = .searching
+            return
+        }
+        if discovered != pick { discovered = pick }
+
+        if pick.name != pairedName || pairingCode.isEmpty {
+            if case .declined = pairing { return }
+            await pair(with: pick)
+            return
+        }
+        if pairing != .paired { pairing = .paired }
+        if !isBusy { await refresh() }
     }
+
+    /// Asks the Mac for a code. Someone there has to click Allow.
+    func pair(with companion: RemoteDiscovery.Companion) async {
+        pairing = .waitingForApproval(companion.name)
+        let body = try? JSONSerialization.data(withJSONObject: ["name": UIDevice.current.name])
+        do {
+            let reply = try parse(await exchange(endpoint: companion.endpoint,
+                                                 payload: requestData(method: "POST", path: "/pair", body: body),
+                                                 timeout: .seconds(120)))
+            guard let code = reply["code"] as? String, !code.isEmpty else { throw RemoteError(message: "The Mac sent no code.") }
+            pairingCode = code
+            pairedName = companion.name
+            pairing = .paired
+            await refresh()
+        } catch let failure as RemoteError where failure.message.contains("already waiting") {
+            // Our own earlier request, still on screen at the Mac.
+            pairing = .waitingForApproval(companion.name)
+        } catch let failure as RemoteError where !failure.isReachability {
+            pairing = .declined(failure.message)
+        } catch {
+            pairing = .searching
+        }
+    }
+
+    /// Clears a refusal so the next pass asks the Mac again.
+    func retryPairing() {
+        pairing = .searching
+        pairingCode = ""
+    }
+
+    var isConfigured: Bool { discovered != nil && !pairingCode.isEmpty && pairing == .paired }
 
     /// A companion answered and is not in trouble. Nothing in this app may
     /// change a location unless this is true: without a companion there is no
-    /// device to spoof, and a location set only inside this app would be a
-    /// lie about what the phone is reporting.
+    /// device to spoof.
     var isConnected: Bool { status != nil && trouble == nil }
 
     /// The companion is connected and has a device it can actually spoof.
@@ -89,12 +151,26 @@ final class RemoteControlClient {
 
     /// Why spoofing is unavailable, in one line, or nil when it is available.
     var unavailableReason: String? {
-        if !isConfigured { return "Pick your Mac under Remote and enter its pairing code." }
-        if !isConnected { return "Not connected to the companion on your Mac." }
-        if status?.detached == true {
-            return "This iPhone has left the Mac, so the session spoofing it has gone too. Reconnect to set a location again, or spoof from this phone directly."
+        switch pairing {
+        case .searching:
+            return "Looking for the Mac companion on this Wi-Fi."
+        case let .waitingForApproval(name):
+            return "Click Allow on \(name) to pair."
+        case let .declined(message):
+            return "Pairing failed: \(message)"
+        case .paired:
+            break
         }
-        if status?.ready != true { return "The companion has no iPhone it can spoof. Check the cable and Developer Mode." }
+        if !isConnected {
+            switch trouble {
+            case let .unreachable(message), let .refused(message): return message
+            case nil: return "Connecting to the Mac companion…"
+            }
+        }
+        if status?.detached == true {
+            return "The iPhone left the Mac. Plug it back in, or use the same Wi-Fi."
+        }
+        if status?.ready != true { return "The Mac has no iPhone it can spoof. Plug it in once and check Developer Mode." }
         return nil
     }
 
@@ -191,8 +267,9 @@ final class RemoteControlClient {
         trouble = (error as? RemoteError)?.isReachability == true ? .unreachable(message) : .refused(message)
     }
 
-    func setLocation(latitude: Double, longitude: Double, name: String?) async {
-        guard isConfigured else { return }
+    @discardableResult
+    func setLocation(latitude: Double, longitude: Double, name: String?) async -> Bool {
+        guard isConfigured else { return false }
         isBusy = true
         defer { isBusy = false }
 
@@ -206,8 +283,10 @@ final class RemoteControlClient {
             trouble = nil
             lastSent = (latitude, longitude, name)
             await refresh()
+            return true
         } catch {
             record(error)
+            return false
         }
     }
 
@@ -234,47 +313,28 @@ final class RemoteControlClient {
         /// True when the companion could not be reached at all, as opposed to
         /// reached and refusing.
         var isReachability = false
+        /// The Mac no longer knows this phone's code.
+        var isUnpaired = false
     }
 
     private func send(method: String, path: String, body: Data?) async throws -> [String: Any] {
-        let trimmedHost = host.trimmingCharacters(in: .whitespaces)
-        let payload = requestData(method: method, path: path, body: body, host: trimmedHost)
-
-        // A discovered companion is tried first, then the typed address. A
-        // Bonjour record can resolve to an interface that cannot actually be
-        // reached — a stale advertisement, or an interface the phone has no
-        // route to — and the address is right there, so there is no reason to
-        // fail without trying it.
-        var attempts: [NWEndpoint] = []
-        if let discovered { attempts.append(discovered.endpoint) }
-        if let direct = directEndpoint(host: trimmedHost) { attempts.append(direct) }
-
-        guard !attempts.isEmpty else {
-            throw RemoteError(message: "Pick a companion, or type its address and port.",
-                              isReachability: true)
+        guard let discovered else {
+            throw RemoteError(message: "The Mac companion is not on this network.", isReachability: true)
         }
-
-        var lastFailure: Error?
-        for endpoint in attempts {
-            do {
-                return try await parse(await exchange(endpoint: endpoint, payload: payload))
-            } catch let failure as RemoteError where failure.isReachability {
-                lastFailure = failure          // unreachable: worth trying the next
-            }
+        do {
+            return try parse(await exchange(endpoint: discovered.endpoint,
+                                            payload: requestData(method: method, path: path, body: body)))
+        } catch let failure as RemoteError where failure.isUnpaired {
+            // The Mac forgot this phone; ask again rather than failing forever.
+            pairingCode = ""
+            pairing = .searching
+            throw failure
         }
-        throw lastFailure ?? RemoteError(message: "Could not reach the companion.", isReachability: true)
     }
 
-    private func directEndpoint(host trimmedHost: String) -> NWEndpoint? {
-        guard !trimmedHost.isEmpty,
-              let number = UInt16(port.trimmingCharacters(in: .whitespaces)),
-              let endpointPort = NWEndpoint.Port(rawValue: number) else { return nil }
-        return .hostPort(host: NWEndpoint.Host(trimmedHost), port: endpointPort)
-    }
-
-    private func requestData(method: String, path: String, body: Data?, host trimmedHost: String) -> Data {
+    private func requestData(method: String, path: String, body: Data?) -> Data {
         var request = "\(method) \(path) HTTP/1.1\r\n"
-        request += "Host: \(trimmedHost.isEmpty ? "companion" : trimmedHost)\r\n"
+        request += "Host: companion\r\n"
         request += "X-Pair-Code: \(pairingCode)\r\n"
         request += "Connection: close\r\n"
         if let body {
@@ -298,9 +358,8 @@ final class RemoteControlClient {
         let json = (try? JSONSerialization.jsonObject(with: Data(bodyData)) as? [String: Any]) ?? [:]
 
         guard head.contains(" 200 ") else {
-            // A refusal means the companion answered, so it is not a
-            // reachability problem and the next endpoint would refuse too.
-            throw RemoteError(message: json["error"] as? String ?? "The companion refused the request.")
+            throw RemoteError(message: json["error"] as? String ?? "The companion refused the request.",
+                              isUnpaired: head.contains(" 401 "))
         }
         return json
     }
@@ -310,7 +369,8 @@ final class RemoteControlClient {
     /// is not answering.
     private static let requestTimeout: Duration = .seconds(8)
 
-    private func exchange(endpoint: NWEndpoint, payload: Data) async throws -> Data {
+    private func exchange(endpoint: NWEndpoint, payload: Data,
+                          timeout: Duration = RemoteControlClient.requestTimeout) async throws -> Data {
         let connection = NWConnection(to: endpoint, using: .tcp)
         let finished = Finished()
 
@@ -323,11 +383,11 @@ final class RemoteControlClient {
             // in flight, the spinner never stopped, and Connect stayed
             // disabled with no way back.
             let timeout = Task.detached {
-                try? await Task.sleep(for: Self.requestTimeout)
+                try? await Task.sleep(for: timeout)
                 guard finished.claim() else { return }
                 connection.cancel()
                 continuation.resume(throwing: RemoteError(
-                    message: "The companion did not answer within 8 seconds. Check that it is running, that Remote Control is on, and that macOS is not blocking incoming connections in System Settings ▸ Network ▸ Firewall.",
+                    message: "The Mac companion did not answer. Check it is open, and that macOS is not blocking incoming connections (companion ▸ Settings ▸ Remote Control).",
                     isReachability: true))
             }
 

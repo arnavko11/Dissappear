@@ -113,16 +113,17 @@ struct OnboardingPage: Identifiable {
             ]),
 
         OnboardingPage(
-            symbol: "laptopcomputer.and.iphone",
-            title: "Pairing takes one code",
+            symbol: "wifi",
+            title: "Nothing to type",
             body: """
-            Run Dissappear Companion on a Mac on the same network. It finds \
-            itself; you type the pairing code it shows once.
+            With Dissappear Companion open on a Mac on the same Wi-Fi, this \
+            app finds it by itself. Click Allow on the Mac once, and allow \
+            Local Network access here when iOS asks — that is how the two talk.
             """,
             bullets: [
-                "Open Remote in this app and pick your Mac",
-                "Enter the eight-character pairing code",
-                "Away from home, put both on a mesh VPN such as Tailscale"
+                "No address, no code",
+                "Tap the status in the top-left corner to see how you are connected",
+                "Move the map and tap Spoof Here — that's it"
             ]),
 
         OnboardingPage(

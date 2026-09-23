@@ -24,7 +24,7 @@ struct RoutesPanel: View {
                         }
                     }
                     .contextMenu {
-                        Button("Run Simulation") { run(route) }
+                        Button("Play Route") { run(route) }
                         Button("Show on Map") { show(route) }
                         Button("Duplicate") { duplicate(route) }
                         Button("Delete", role: .destructive) { delete(route) }

@@ -3,8 +3,6 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(MainViewModel.self) private var main
-    @Environment(SimulationEngine.self) private var engine
-    @Environment(SimulationViewModel.self) private var simulation
     @Environment(RouteEditorViewModel.self) private var routeEditor
     @Environment(LocationSearchService.self) private var searchService
     @Environment(SpoofingCoordinator.self) private var spoofing
@@ -14,6 +12,7 @@ struct RootView: View {
     @State private var isLibraryPresented = false
     @State private var isSettingsPresented = false
     @State private var isOnboardingPresented = false
+    @State private var isConnectionPresented = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
@@ -38,6 +37,9 @@ struct RootView: View {
         .sheet(isPresented: $isSettingsPresented) {
             NavigationStack { SettingsView() }
         }
+        .sheet(isPresented: $isConnectionPresented) {
+            NavigationStack { ConnectionView() }
+        }
         .fullScreenCover(isPresented: $isOnboardingPresented) {
             OnboardingView()
         }
@@ -46,33 +48,87 @@ struct RootView: View {
         } message: { error in
             Text(error.message)
         }
+        // A failed spoof is said on the map, where it was asked for — it used
+        // to be visible only inside Settings.
+        .alert("Could Not Spoof", isPresented: Binding(
+            get: { spoofing.lastFailure != nil && !isConnectionPresented },
+            set: { if !$0 { spoofing.lastFailure = nil } })) {
+            Button("Connection") { spoofing.lastFailure = nil; isConnectionPresented = true }
+            Button("OK", role: .cancel) { spoofing.lastFailure = nil }
+        } message: {
+            Text(spoofing.lastFailure ?? "")
+        }
+        .onChange(of: main.previewPlace) { _, place in
+            // Picking a place closes the library so the map, the pin and its
+            // Spoof button are in view.
+            if place != nil, sizeClass != .regular { isLibraryPresented = false }
+        }
         .task {
             // Nobody should reach the map without being told what this app does.
             if !didCompleteOnboarding { isOnboardingPresented = true }
-            await main.beginSession()
         }
     }
 
     private var workspace: some View {
-        TestMapView(onMapTap: handleMapTap, onWaypointTap: handleWaypointTap)
+        SpoofMapView(onMapTap: handleMapTap, onWaypointTap: handleWaypointTap)
             .ignoresSafeArea(edges: sizeClass == .regular ? [] : .top)
+            .overlay { crosshair }
             .overlay(alignment: .topTrailing) {
                 MapOverlayControls()
                     .padding(.trailing, 12)
                     .padding(.top, 12)
             }
             .overlay(alignment: .top) { tapModeBanner }
-            .overlay(alignment: .bottom) { disconnectedBanner }
-            .safeAreaInset(edge: .bottom) { SimulationBar() }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 8) {
+                    if let place = main.previewPlace { placeCard(place) }
+                    SimulationBar()
+                }
+            }
             .navigationTitle("Dissappear")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { toolbarContent }
     }
 
+    /// Marks the spot Spoof Here uses.
+    private var crosshair: some View {
+        Image(systemName: "plus")
+            .font(.title3.weight(.light))
+            .foregroundStyle(.primary.opacity(0.7))
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private func placeCard(_ place: PlaceResult) -> some View {
+        PreviewCard(place: place)
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) { main.previewPlace = nil }
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .padding(10)
+                .accessibilityLabel("Close")
+            }
+            .glassPanel(cornerRadius: 22)
+            .padding(.horizontal, 12)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+    }
+
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
-            StatusIndicator(status: main.status(engine: engine))
+            Button { isConnectionPresented = true } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: spoofing.canSpoof ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                        .foregroundStyle(spoofing.canSpoof ? Color.green : Color.orange)
+                    Text(connectionTitle).font(.footnote)
+                }
+            }
+            .accessibilityLabel("Connection: \(connectionTitle)")
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
             if sizeClass != .regular {
@@ -81,6 +137,11 @@ struct RootView: View {
                 }
             }
             Menu {
+                Button {
+                    isConnectionPresented = true
+                } label: {
+                    Label("Connection", systemImage: "antenna.radiowaves.left.and.right")
+                }
                 Button {
                     isSettingsPresented = true
                 } label: {
@@ -91,42 +152,17 @@ struct RootView: View {
                 } label: {
                     Label("What This App Does", systemImage: "questionmark.circle")
                 }
-                Divider()
-                Button(role: .destructive, action: resetEnvironment) {
-                    Label("Reset Spoofed Location", systemImage: "arrow.counterclockwise.circle")
-                }
             } label: {
                 Label("More", systemImage: "ellipsis.circle")
             }
         }
     }
 
-    /// Without a companion there is no device to spoof, so the app says so
-    /// rather than offering controls that would only move a dot in here.
-    @ViewBuilder
-    private var disconnectedBanner: some View {
-        if let reason = spoofing.unavailableReason {
-            Button {
-                main.section = .remote
-                isLibraryPresented = true
-            } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "antenna.radiowaves.left.and.right.slash")
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Not spoofing").font(.footnote.weight(.semibold))
-                        Text(reason).font(.caption2).foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 4)
-                    Image(systemName: "chevron.right").font(.caption2)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.plain)
-            .glassPanel(cornerRadius: 16)
-            .padding(.horizontal, 12)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+    private var connectionTitle: String {
+        switch spoofing.route {
+        case .onDevice: return "This iPhone"
+        case .companion: return "Mac"
+        case .unavailable: return "Set Up"
         }
     }
 
@@ -150,9 +186,7 @@ struct RootView: View {
 
     private func handleMapTap(_ coordinate: CLLocationCoordinate2D) {
         switch main.tapMode {
-        case .inspect:
-            break
-        case .dropPin:
+        case .inspect, .dropPin:
             Task {
                 let place = await searchService.describe(coordinate)
                 withAnimation(.easeInOut(duration: 0.2)) { main.previewPlace = place }
@@ -182,18 +216,6 @@ struct RootView: View {
             main.tapMode = .inspect
         } else {
             main.tapMode = .moveWaypoint(waypoint.persistentModelID)
-        }
-    }
-
-    /// Returns the app to its default test environment.
-    private func resetEnvironment() {
-        simulation.resetSession()
-        Task { await spoofing.clear() }
-        withAnimation(.easeInOut(duration: 0.2)) {
-            main.previewPlace = nil
-            main.editingRoute = nil
-            main.tapMode = .inspect
-            main.camera = .region(.defaultTestRegion)
         }
     }
 }

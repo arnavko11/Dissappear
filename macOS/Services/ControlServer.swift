@@ -4,8 +4,9 @@ import Network
 /// A small HTTP server on the local network so the iOS app can steer the
 /// simulated location while the Mac holds the developer session open.
 ///
-/// It listens only on the local network, every request must carry the pairing
-/// code shown in the companion, and it exposes nothing but the location
+/// It listens only on the local network, every request must carry the code a
+/// phone is given when someone at the Mac approves it, and it exposes nothing
+/// but the location
 /// controls. It runs by default, because steering the spoofed location from
 /// the phone is the point of the companion; Settings can switch it off.
 final class ControlServer: @unchecked Sendable {
@@ -265,7 +266,45 @@ final class ControlServer: @unchecked Sendable {
         }
     }
 
+    /// Asks whoever is at the Mac whether a phone may pair. The phone finds
+    /// this Mac by itself and asks; nobody types an address or a code.
+    var onPairRequest: (@Sendable (String) async -> Bool)?
+
+    private var isPairPending = false
+
+    private func claimPairSlot() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if isPairPending { return false }
+        isPairPending = true
+        return true
+    }
+
+    private func releasePairSlot() {
+        lock.lock(); isPairPending = false; lock.unlock()
+    }
+
+    /// The one request that needs no code, because it is how a phone gets
+    /// one. It hands the code over only after a person at the Mac says yes,
+    /// and one prompt at a time, so the network cannot spam the screen.
+    private func pair(_ request: Request) async -> Response {
+        guard let onPairRequest else { return .error(503, "The companion is not ready.") }
+        guard claimPairSlot() else {
+            return .error(429, "Another iPhone is already waiting for approval on the Mac.")
+        }
+        defer { releasePairSlot() }
+
+        let payload = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any]
+        let name = String((payload?["name"] as? String ?? "An iPhone").prefix(60))
+        guard await onPairRequest(name) else {
+            return .error(403, "Declined on the Mac.")
+        }
+        return .ok(["code": pairingCode])
+    }
+
     private func respond(to request: Request, headers: [String: String]) async -> Response {
+        if request.method == "POST", request.path == "/pair" {
+            return await pair(request)
+        }
         let expected = pairingCode
         guard !expected.isEmpty, headers["x-pair-code"] == expected else {
             // Slow a wrong code down. The code is long enough that guessing
@@ -273,7 +312,7 @@ final class ControlServer: @unchecked Sendable {
             // port, and an unthrottled guess loop costs nothing to run.
             noteFailedAttempt()
             try? await Task.sleep(for: .milliseconds(failureDelayMilliseconds))
-            return .error(401, "Wrong pairing code.")
+            return .error(401, "This iPhone is no longer paired with the Mac.")
         }
         clearFailedAttempts()
         guard let handler else {

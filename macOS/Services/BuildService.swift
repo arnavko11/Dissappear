@@ -53,7 +53,7 @@ struct BuildService {
     }
 
     /// Writes the companion's simulation library into the iOS target's resources
-    /// so the next build carries the current locations, routes and scenarios.
+    /// so the next build carries the current locations and routes.
     func prepare(configuration: BuildConfiguration, library: SimulationLibrary) throws -> URL {
         guard let projectURL = configuration.projectURL else {
             throw CompanionError(title: "Project not configured",
