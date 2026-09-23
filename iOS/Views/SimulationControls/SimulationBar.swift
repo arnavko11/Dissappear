@@ -113,8 +113,8 @@ struct SimulationBar: View {
                 .disabled(!simulation.canStart || !spoofing.canSpoof)
                 .accessibilityLabel("Restart route")
 
-                @Bindable var simulation = simulation
-                SpeedControl(speed: $simulation.speed)
+                SpeedControl(speed: Binding(get: { simulation.speed },
+                                            set: { simulation.speed = $0 }))
                 Spacer(minLength: 0)
             }
         }

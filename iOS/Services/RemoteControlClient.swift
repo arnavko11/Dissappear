@@ -367,7 +367,7 @@ final class RemoteControlClient {
     /// How long a single request may take before it is abandoned. Local
     /// network round trips are milliseconds; anything near this is a Mac that
     /// is not answering.
-    private static let requestTimeout: Duration = .seconds(8)
+    nonisolated private static let requestTimeout: Duration = .seconds(8)
 
     private func exchange(endpoint: NWEndpoint, payload: Data,
                           timeout: Duration = RemoteControlClient.requestTimeout) async throws -> Data {
