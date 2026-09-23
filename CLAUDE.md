@@ -58,6 +58,13 @@ calls `tunnel_create_rppairing` at `10.7.0.1:49152` with an `RpPairingFile`
 record can only be made over USB, through the trusted CoreDeviceProxy tunnel's
 untrusted tunnelservice; `PairingRecordService.pairScript` does it with
 pymobiledevice3 and writes it alongside the lockdown record, as iloader does.
+The script then writes the record into the app's container over USB
+(house_arrest, `Documents/pairing-record.plist`) like iloader's "Place"; the
+app picks it up at launch/foreground and deletes the copy. A stored record
+without the remote-pairing keys is discarded at launch, not retried forever.
+The launcher for a venv under "Application Support" is `#!/bin/sh` (space in
+path) — never take the shebang as the interpreter.
+
 When the on-device path breaks, compare with StikDebug's `IdeviceFFIBridge.swift`
 before theorising.
 

@@ -66,7 +66,7 @@ final class SpoofingCoordinator {
             return .unavailable("A pairing record is imported, but nothing is answering at \(loopbackAddress). Switch on StosVPN or LocalDevVPN, or connect the Mac companion.")
         }
         return .unavailable(client.unavailableReason
-            ?? "Import a pairing record, or pair the Mac companion.")
+            ?? "Plug into the Mac and click Set Up iPhone Spoofing in the companion, or open the companion on this Wi-Fi.")
     }
 
     var canSpoof: Bool {

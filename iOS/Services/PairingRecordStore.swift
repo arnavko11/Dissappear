@@ -22,8 +22,40 @@ final class PairingRecordStore {
     var hasRecord: Bool { FileManager.default.fileExists(atPath: Self.url.path) }
 
     init() {
+        // A record kept from an older version lacks the remote pairing and
+        // would be refused on every spoof, always with the same message.
+        // Dropping it makes the app say "set up" instead of failing forever.
+        if let data = try? Data(contentsOf: Self.url), (try? Self.validate(data)) == nil {
+            try? FileManager.default.removeItem(at: Self.url)
+        }
         refresh()
     }
+
+    /// Where the Mac companion drops a record over USB (house_arrest writes
+    /// into the app's container, as iloader does for StikDebug).
+    static var placedURL: URL {
+        URL.documentsDirectory.appendingPathComponent("pairing-record.plist")
+    }
+
+    /// Takes a record the Mac placed, if there is one. Called at launch and
+    /// whenever the app comes forward. The placed copy is removed either way:
+    /// it is a credential, and Documents is visible to file sharing.
+    @discardableResult
+    func pickUpPlacedRecord() -> Bool {
+        let placed = Self.placedURL
+        guard FileManager.default.fileExists(atPath: placed.path) else { return false }
+        defer { try? FileManager.default.removeItem(at: placed) }
+        do {
+            try importRecord(from: placed)
+            return true
+        } catch {
+            lastPickUpFailure = error.localizedDescription
+            return false
+        }
+    }
+
+    /// Why a record the Mac placed could not be used.
+    var lastPickUpFailure: String?
 
     func refresh() {
         importedAt = try? FileManager.default
@@ -73,7 +105,7 @@ final class PairingRecordStore {
             case .notARecord:
                 return "That file is not a pairing record."
             case .noRemotePairing:
-                return "That record was made by an older Mac companion and lacks the remote pairing this iPhone checks. Update the companion, plug the iPhone in, choose Export Pairing Record, tap Trust, and import the new file."
+                return "That record was made by an older Mac companion and lacks the remote pairing this iPhone checks. Update the companion, plug the iPhone in, click Set Up iPhone Spoofing (Devices), and tap Trust — the new record arrives in this app by itself."
             }
         }
     }

@@ -156,14 +156,22 @@ struct DeviceDetailView: View {
                     }
 
                     Section {
-                        Button("Export Pairing Record…") {
+                        Button("Set Up iPhone Spoofing") {
+                            Task { await model.setUpOnDeviceSpoofing() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.isBusy || model.locationTooling.tool == nil)
+                        if let notice = model.pairingRecordNotice {
+                            Text(notice).font(.callout)
+                        }
+                        Button("Export Pairing Record to a File…") {
                             Task { await model.exportPairingRecordWithSavePanel() }
                         }
                         .disabled(model.isBusy || model.locationTooling.tool == nil)
                     } header: {
-                        Text("Pairing Record")
+                        Text("Spoof Without a Mac")
                     } footer: {
-                        Text("The trust this iPhone placed in this Mac, as a file. Apps that spoof from the phone alone — with no computer present — still need this once, because nothing on the phone may open its own developer services without it. Treat it as a credential: anyone holding it can reach this device's developer services.")
+                        Text("With the iPhone plugged in and unlocked, click Set Up iPhone Spoofing and tap Trust on the phone. It pairs and hands the result straight to the Dissappear app — nothing to AirDrop or import. After that the phone spoofs itself anywhere, with StosVPN or LocalDevVPN switched on. Do it again after an iOS update.")
                     }
                 }
                 .formStyle(.grouped)

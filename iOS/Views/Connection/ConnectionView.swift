@@ -33,13 +33,17 @@ struct ConnectionView: View {
                 } else {
                     Button("Import Pairing Record…") { isImportingRecord = true }
                 }
+                if let failure = pairingRecords.lastPickUpFailure {
+                    InlineMessage(text: "The record the Mac sent was not usable: \(failure)",
+                                  systemImage: "exclamationmark.triangle", tint: .orange)
+                }
                 if let failure = spoofing.lastOnDeviceFailure {
                     InlineMessage(text: failure, systemImage: "exclamationmark.triangle", tint: .orange)
                 }
             } header: {
                 Text("No Computer — Works Anywhere")
             } footer: {
-                Text("1. On the Mac companion, plug the iPhone in, choose Devices ▸ Export Pairing Record, tap Trust on the phone, and AirDrop the file here.\n2. Install StosVPN or LocalDevVPN and switch it on.\nThen this phone spoofs itself — on cellular, away from home, no Mac. Keep the record private: it unlocks this phone's developer services.")
+                Text("1. Plug this iPhone into the Mac, open Dissappear Companion ▸ Devices, click Set Up iPhone Spoofing, and tap Trust here. The record arrives in this app by itself.\n2. Install StosVPN or LocalDevVPN and switch it on.\nThen this phone spoofs itself — on cellular, away from home, no Mac.")
             }
 
             Section {
