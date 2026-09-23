@@ -27,10 +27,14 @@ struct PairingRecordService {
     /// The device has to be plugged in, unlocked and already trusting this
     /// Mac: the record is what that trust produced, and it cannot be
     /// manufactured without it.
+    /// Returns nil when the record was also written straight into the iPhone
+    /// app, or why it could not be — in which case the file has to be carried
+    /// over by hand.
+    @discardableResult
     func export(device: Device,
                 tool: LocationSimulationService.Tool,
                 to destination: URL,
-                onOutputLine: @escaping @Sendable (String) -> Void) async throws {
+                onOutputLine: @escaping @Sendable (String) -> Void) async throws -> String? {
         guard tool.version != "devicectl" else {
             throw CompanionError(
                 title: "pymobiledevice3 Is Needed",
@@ -73,6 +77,14 @@ struct PairingRecordService {
                 recommendedAction: "Check the technical details, then try again with the phone unlocked.",
                 technicalDetails: result.combinedOutput)
         }
+
+        if result.combinedOutput.contains("PLACED_ON_DEVICE") { return nil }
+        let reason = result.combinedOutput
+            .components(separatedBy: "\n")
+            .first { $0.contains("NOT_PLACED:") }?
+            .replacingOccurrences(of: "NOT_PLACED:", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        return reason ?? "the tool did not say"
     }
 
     /// The Python that pymobiledevice3 runs under, so the script imports the
@@ -129,7 +141,9 @@ struct PairingRecordService {
 
     /// Writes the file the phone spoofs itself with: the lockdown record plus
     /// a remote pairing (`public_key`, `private_key`, `identifier`) — the same
-    /// layout iloader produces for StikDebug.
+    /// layout iloader produces for StikDebug — and then, like iloader's
+    /// "Place", writes it straight into the Dissappear app's container over
+    /// USB, so there is no file to carry over and no stale one left behind.
     ///
     /// The phone does not use lockdown to reach itself: over the loopback VPN,
     /// lockdownd hangs up on CoreDeviceProxy (the broken pipe). What works is
@@ -142,6 +156,33 @@ struct PairingRecordService {
     from pymobiledevice3.lockdown import create_using_usbmux
     from pymobiledevice3.remote.userspace_tunnel import UserspaceRsdTunnel
     from pymobiledevice3.remote.tunnel_service import create_core_device_tunnel_service_using_rsd
+    from pymobiledevice3.services.installation_proxy import InstallationProxyService
+    from pymobiledevice3.services.house_arrest import HouseArrestService
+
+    async def place(udid, data):
+        ld = await create_using_usbmux(serial=udid)
+        async with InstallationProxyService(lockdown=ld) as proxy:
+            apps = await proxy.get_apps(application_type="User")
+        bundle = next((identifier for identifier, info in apps.items()
+                       if info.get("CFBundleExecutable") == "Dissappear"
+                       or identifier.startswith("com.dissappear.testapp")), None)
+        if bundle is None:
+            return "the Dissappear app is not installed on this iPhone"
+        failure = "unknown"
+        for documents_only in (False, True):
+            try:
+                service = await HouseArrestService.create(ld, bundle, documents_only=documents_only)
+            except Exception as error:
+                failure = repr(error)
+                continue
+            try:
+                await service.set_file_contents("/Documents/pairing-record.plist", data)
+                return None
+            except Exception as error:
+                failure = repr(error)
+            finally:
+                await service.close()
+        return failure
 
     async def main(udid, out):
         ld = await create_using_usbmux(serial=udid)
@@ -170,7 +211,11 @@ struct PairingRecordService {
         combined["identifier"] = identifier
         if record.get("peer_alt_irk"):
             combined["alt_irk"] = record["peer_alt_irk"]
-        Path(out).write_bytes(plistlib.dumps(combined))
+        data = plistlib.dumps(combined)
+        Path(out).write_bytes(data)
+
+        failure = await place(udid, data)
+        print("PLACED_ON_DEVICE" if failure is None else f"NOT_PLACED: {failure}", flush=True)
 
     asyncio.run(main(sys.argv[1], sys.argv[2]))
     """

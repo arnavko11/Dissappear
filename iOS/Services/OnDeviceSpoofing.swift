@@ -30,18 +30,15 @@ final class OnDeviceSpoofing {
         var errorDescription: String? {
             switch self {
             case .noPairingRecord:
-                return "No pairing record has been imported. Export one from the Mac companion under Devices, then import it here."
+                return "Not set up yet. Plug this iPhone into the Mac, click Set Up iPhone Spoofing in the companion (Devices), and tap Trust."
             case let .recordRejected(detail):
                 return """
-                The iPhone refused this pairing record.
-
-                Update the Mac companion, plug the iPhone in, choose Export \
-                Pairing Record, tap Trust on the iPhone, and import the new \
-                file here. Records made before this version lack the part the \
-                iPhone checks, and any record expires after an iOS update or \
-                reset.
-
                 \(detail)
+
+                The iPhone refused this pairing record. Plug it into the Mac, \
+                click Set Up iPhone Spoofing in the companion (Devices), tap \
+                Trust, then try again here. Records expire after an iOS \
+                update or reset.
                 """
             case let .noLoopback(address):
                 return "Nothing is answering at \(address). Install StosVPN or LocalDevVPN — separate apps, not part of this one — and switch the VPN on. iOS will not let this app reach its own device's services without one."

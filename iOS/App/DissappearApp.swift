@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct DissappearApp: App {
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(PreferenceKey.appearance) private var appearanceRaw = AppearanceOption.system.rawValue
     @AppStorage(PreferenceKey.defaultSpeed) private var defaultSpeed = 1.0
     @AppStorage(PreferenceKey.updateFrequency) private var updateFrequency = 20.0
@@ -52,7 +53,14 @@ struct DissappearApp: App {
                     engine.updateFrequency = updateFrequency
                     PersistenceService(context: container.mainContext).seedIfNeeded()
                 }
+                .onChange(of: scenePhase) { _, phase in
+                    // The Mac may have just placed a pairing record over USB.
+                    if phase == .active, pairingRecords.pickUpPlacedRecord() {
+                        Task { await spoofing.refreshLoopback() }
+                    }
+                }
                 .task {
+                    pairingRecords.pickUpPlacedRecord()
                     // Finds and pairs with the Mac on its own; nothing to type.
                     remoteControl.start()
                     // The VPN belongs to another app and can go at any time,

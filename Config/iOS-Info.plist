@@ -12,6 +12,10 @@
 	<!-- Keeps the app running while it spoofs this phone by itself. The spoof
 	     lasts only as long as the app's connection to the device; suspended,
 	     the heartbeat goes unanswered and iOS drops it. -->
+	<!-- Lets the Mac companion drop a pairing record into Documents over USB
+	     when the whole container cannot be vended. It is removed on pickup. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>

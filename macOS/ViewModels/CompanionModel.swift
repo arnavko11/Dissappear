@@ -61,6 +61,8 @@ final class CompanionModel: ObservableObject {
         didSet { Preferences.projectPath = configuration.projectPath }
     }
     @Published var error: CompanionError?
+    /// Result of the last pairing export, shown under the button.
+    @Published var pairingRecordNotice: String?
     @Published private(set) var isBusy = false
 
     private let toolchainService = ToolchainService()
@@ -746,15 +748,29 @@ extension CompanionModel {
         defer { isBusy = false; activity = nil }
 
         do {
-            try await pairingRecords.export(device: device, tool: tool, to: destination) { [weak self] line in
+            let notPlaced = try await pairingRecords.export(device: device, tool: tool, to: destination) { [weak self] line in
                 Task { @MainActor in self?.appendLog(line) }
             }
-            appendLog("Pairing record written to \(destination.path)")
+            pairingRecordNotice = notPlaced == nil
+                ? "Done — sent to the Dissappear app on \(device.name). Open it, switch on the VPN, and tap Spoof Here."
+                : "Paired, but it could not be put into the iPhone app (\(notPlaced ?? "")). Is the Dissappear app installed on it? Otherwise use Export Pairing Record to a File, and import that in the app under Connection."
+            appendLog(pairingRecordNotice ?? "")
         } catch let failure as CompanionError {
             error = failure
         } catch {
             self.error = .generic("Exporting the pairing record failed", error)
         }
+    }
+
+    /// One click: pairs, and writes the record straight into the iPhone app.
+    /// The file only passes through a temporary folder — it is a credential,
+    /// so nothing is left lying around on the Mac.
+    func setUpOnDeviceSpoofing() async {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        await exportPairingRecord(to: folder.appendingPathComponent("pairing-record.plist"))
     }
 
     /// Asks where to put the record, then writes it there.
