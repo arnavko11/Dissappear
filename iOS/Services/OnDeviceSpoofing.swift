@@ -33,17 +33,15 @@ final class OnDeviceSpoofing {
                 return "No pairing record has been imported. Export one from the Mac companion under Devices, then import it here."
             case let .recordRejected(detail):
                 return """
-                The iPhone accepted the connection and then closed it, which \
-                means it would not open a session with this pairing record.
+                The iPhone hung up on this app, so it would not open a session \
+                with the imported pairing record. In order:
 
-                Usually one of three things:
-
-                1. The phone is locked. Unlock it and try again.
-                2. The record has expired. They lapse on their own, and on any \
-                iOS update or reset — export a fresh one from the Mac \
-                companion under Devices and import it again.
-                3. The Mac that produced the record is no longer trusted by \
-                the phone. Reconnect the cable, tap Trust, then export again.
+                1. Plug the iPhone into the Mac with Dissappear Companion open \
+                (latest version) for a few seconds. It switches on network \
+                connections, which the loopback VPN needs — the usual cause.
+                2. Keep the iPhone unlocked and try again.
+                3. Still failing: Export Pairing Record on the Mac again, tap \
+                Trust, and import the new file here.
 
                 \(detail)
                 """
@@ -74,6 +72,7 @@ final class OnDeviceSpoofing {
     /// handshake — so doing it per coordinate made a route impossible and
     /// every change sluggish. It is torn down on failure and rebuilt.
     private var session: Session?
+    private var heartbeat: Heartbeat?
 
     private struct Session {
         var provider: OpaquePointer?
@@ -152,6 +151,8 @@ final class OnDeviceSpoofing {
     func closeSession() {
         session?.close()
         session = nil
+        heartbeat?.stop()
+        heartbeat = nil
     }
 
     /// Runs `body` against the open session, opening one if needed.
@@ -187,6 +188,18 @@ final class OnDeviceSpoofing {
         guard await isLoopbackReachable() else {
             throw Failure.noLoopback(loopbackAddress)
         }
+
+        // The heartbeat first: it is the smallest thing that needs a
+        // lockdown session, so if the phone will not accept this record, the
+        // failure is named here rather than three steps later.
+        let beat = Heartbeat()
+        do {
+            try await beat.start(pairingRecordPath: pairingRecordURL.path, address: try socketAddress())
+        } catch let failure as HeartbeatError {
+            throw Self.classify("Starting a lockdown session failed: \(failure.message)")
+        }
+        heartbeat?.stop()
+        heartbeat = beat
 
         var partial = Session()
         // Anything built before a throw still has to be released; success
@@ -246,8 +259,8 @@ final class OnDeviceSpoofing {
         session = partial
     }
 
-    /// Builds the `sockaddr_in` for the loopback VPN's address.
-    private func withSocketAddress(_ body: (UnsafePointer<sockaddr>) throws -> Void) throws {
+    /// The `sockaddr_in` for the loopback VPN's address.
+    private func socketAddress() throws -> sockaddr_in {
         var address = sockaddr_in()
         address.sin_family = sa_family_t(AF_INET)
         address.sin_port = Self.lockdownPort.bigEndian   // lockdownd
@@ -256,7 +269,11 @@ final class OnDeviceSpoofing {
         guard inet_pton(AF_INET, loopbackAddress, &address.sin_addr) == 1 else {
             throw Failure.unreachable("\(loopbackAddress) is not a valid address.")
         }
+        return address
+    }
 
+    private func withSocketAddress(_ body: (UnsafePointer<sockaddr>) throws -> Void) throws {
+        var address = try socketAddress()
         try withUnsafePointer(to: &address) { pointer in
             try pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { try body($0) }
         }
@@ -282,8 +299,12 @@ final class OnDeviceSpoofing {
         let code = error.pointee.code
         idevice_error_free(error)
 
-        let detail = "\(context) failed: \(message) (\(code))"
-        let lower = message.lowercased()
+        throw classify("\(context) failed: \(message) (\(code))")
+    }
+
+    /// Picks the explanation that fits an idevice failure.
+    private static func classify(_ detail: String) -> Failure {
+        let lower = detail.lowercased()
 
         // A broken pipe means the device accepted the connection and then hung
         // up, which is lockdownd refusing the session rather than anything
@@ -291,13 +312,13 @@ final class OnDeviceSpoofing {
         // user looking in the wrong place entirely.
         if lower.contains("broken pipe") || lower.contains("os code 32")
             || lower.contains("connection reset") || lower.contains("eof") {
-            throw Failure.recordRejected(detail)
+            return Failure.recordRejected(detail)
         }
 
         // A refused connection is almost always the loopback VPN being off.
-        if context.contains("Connecting") {
-            throw Failure.unreachable(detail)
+        if lower.contains("connecting") || lower.contains("refused") {
+            return Failure.unreachable(detail)
         }
-        throw Failure.tool(detail)
+        return Failure.tool(detail)
     }
 }

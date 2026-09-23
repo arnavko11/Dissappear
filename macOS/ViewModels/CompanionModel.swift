@@ -173,7 +173,21 @@ final class CompanionModel: ObservableObject {
         if selectedDeviceID == nil || !found.contains(where: { $0.id == selectedDeviceID }) {
             selectedDeviceID = found.first?.id
         }
+
+        // Once per phone per launch: lets the phone's own app spoof it. The
+        // setting lives on the phone, so an already-exported pairing record
+        // starts working without a new export.
+        if let tool = locationTooling.tool {
+            for device in found where !networkConnectionsEnabled.contains(device.udid) {
+                if await pairingRecords.enableNetworkConnections(device: device, tool: tool) {
+                    networkConnectionsEnabled.insert(device.udid)
+                    appendLog("Enabled network connections on \(device.name), so it can spoof itself")
+                }
+            }
+        }
     }
+
+    private var networkConnectionsEnabled: Set<String> = []
 
     /// Why the Devices screen looks the way it does, in the user's terms.
     var deviceHint: (title: String, message: String, action: String?)? {

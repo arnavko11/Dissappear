@@ -56,6 +56,14 @@ and the phone then hangs up (EPIPE) on every on-device session. The export
 pairs again under a new HostID (`PairingRecordService.pairScript`); reusing the
 Mac's HostID would replace the Mac's own trust on the phone.
 
+**The loopback VPN counts as a network connection.** lockdownd refuses
+network sessions unless `EnableWifiConnections` is on, and drops network hosts
+that stop answering its heartbeat. So the Mac switches that setting on for
+every phone it sees (and at export), and the phone runs a `Heartbeat` thread
+before anything else. The app also keeps itself alive in the background with
+location updates while spoofing on-device: suspended, the heartbeat stops and
+the spoof ends.
+
 **Phone↔Mac pairing is automatic.** `POST /pair` is the only unauthenticated
 endpoint; the Mac shows Allow/Don't Allow and returns the code. No address or
 code UI exists on either side — don't add it back.

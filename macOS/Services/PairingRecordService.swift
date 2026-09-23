@@ -95,6 +95,17 @@ struct PairingRecordService {
         return FileManager.default.isExecutableFile(atPath: sibling) ? sibling : "/usr/bin/python3"
     }
 
+    /// Turns on the phone's network lockdown connections — the same switch as
+    /// Finder's "Show this iPhone when on Wi-Fi". Without it the phone hangs
+    /// up on its own app, because the loopback VPN counts as a network.
+    func enableNetworkConnections(device: Device, tool: LocationSimulationService.Tool) async -> Bool {
+        guard tool.version != "devicectl" else { return false }
+        let result = try? await runner.run(tool.executablePath,
+                                           ["lockdown", "wifi-connections", "on", "--udid", device.udid],
+                                           timeout: ProcessRunner.deviceTimeout)
+        return result?.succeeded ?? false
+    }
+
     /// Pairs under a fresh host ID and writes the record, escrow bag and all.
     /// The cache folder is a temporary one so pymobiledevice3's own record is
     /// left alone.
@@ -109,6 +120,11 @@ struct PairingRecordService {
             ld.pair_record = None
             ld.host_id = str(uuid.uuid4()).upper()
             await ld.pair(timeout=120)
+            # The phone reaches itself through the loopback VPN, which lockdownd
+            # treats as a network connection, and it refuses network sessions
+            # unless Wi-Fi connections are on - the broken pipe on the phone.
+            if await ld.validate_pairing():
+                await ld.set_enable_wifi_connections(True)
             record = dict(ld.pair_record)
             record["UDID"] = udid
             if "EscrowBag" not in record:
