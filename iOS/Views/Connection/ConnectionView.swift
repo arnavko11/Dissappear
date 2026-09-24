@@ -45,7 +45,7 @@ struct ConnectionView: View {
             } header: {
                 Text("No Computer — Works Anywhere")
             } footer: {
-                Text("1. Plug this iPhone into the Mac, open Dissappear Companion ▸ Devices, click Set Up iPhone Spoofing, and tap Trust here. The record arrives in this app by itself.\n2. Install StosVPN or LocalDevVPN and switch it on.\nThen this phone spoofs itself — on cellular, away from home, no Mac.")
+                Text("1. Plug this iPhone into the Mac, open Dissappear Companion ▸ Devices, click Set Up iPhone Spoofing, and tap Trust here. The record arrives in this app by itself.\n2. Install LocalDevVPN or StosVPN and switch it on.\nThen this phone spoofs itself, no Mac. On cellular, after switching the VPN on, turn Airplane Mode on and off once — iOS only routes the VPN back to this phone after that.")
             }
 
             Section {
@@ -127,7 +127,7 @@ struct ConnectionView: View {
             "iOS \(UIDevice.current.systemVersion), \(UIDevice.current.model)",
             "Route: \(spoofing.routeName)",
             "Unavailable reason: \(spoofing.unavailableReason ?? "none")",
-            "Loopback: \(spoofing.loopbackAddress):\(OnDeviceSpoofing.pairingPort) reachable=\(spoofing.isLoopbackReachable)",
+            "Loopback: \(spoofing.loopbackAddress):\(OnDeviceSpoofing.pairingPort) reachable=\(spoofing.isLoopbackReachable) cellularOnly=\(spoofing.isCellularOnly)",
             "Pairing record: \(pairingRecords.hasRecord ? "present" : "none"), keys: \(pairingRecords.recordKeys.joined(separator: ", "))",
             "Record pick-up failure: \(pairingRecords.lastPickUpFailure ?? "none")",
             "Mac: \(macDescription), connected=\(client.isConnected), ready=\(client.status?.ready ?? false)",
