@@ -110,6 +110,21 @@ final class OnDeviceSpoofing {
     /// What the last reachability probe saw, for diagnostics.
     private(set) var lastProbe = "not run"
 
+    /// What a probe result means, in the user's terms.
+    nonisolated static func meaning(of detail: String) -> String {
+        let lower = detail.lowercased()
+        if lower.contains("refused") {
+            return "The VPN is routing, but the iPhone's pairing service is not listening. iOS runs it only while Wi-Fi is switched on: turn Wi-Fi on in Settings (it does not need to join a network) and try again."
+        }
+        if lower.contains("timed out") || lower.contains("unreachable") || lower.contains("no route") {
+            return "Nothing is routing to that address: the VPN is off or not passing traffic. Switch LocalDevVPN/StosVPN off and on, or toggle Airplane Mode with it on."
+        }
+        if lower.contains("connected") {
+            return "The address answers now; try again."
+        }
+        return ""
+    }
+
     nonisolated static func probe(address: String, port: UInt16) -> (reachable: Bool, detail: String) {
         var target = sockaddr_in()
         target.sin_family = sa_family_t(AF_INET)
@@ -220,7 +235,17 @@ final class OnDeviceSpoofing {
                                                   "Dissappear", pairing, nil, nil,
                                                   &partial.adapter, &partial.handshake)
         }
-        try Self.check(tunnelError, context: "Opening the tunnel")
+        do {
+            try Self.check(tunnelError, context: "Opening the tunnel")
+        } catch {
+            // idevice reports a failed connect as "device socket io failed"
+            // and drops the errno, which is the one thing that says whether
+            // the VPN is down (timed out / unreachable) or the phone's pairing
+            // service is not listening (refused). Probe once and say which.
+            let probe = Self.probe(address: loopbackAddress, port: Self.pairingPort)
+            lastProbe = probe.detail
+            throw Failure.tool("\(error.localizedDescription)\n\nSocket check on \(loopbackAddress):\(Self.pairingPort): \(probe.detail). \(Self.meaning(of: probe.detail))")
+        }
 
         // Borrows the adapter and the handshake, so both are still ours.
         try Self.check(remote_server_connect_rsd(partial.adapter, partial.handshake, &partial.server),
