@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 /// Decides which way a location change reaches the device.
 ///
@@ -39,6 +40,10 @@ final class SpoofingCoordinator {
         }
     }
 
+    private let pathMonitor = NWPathMonitor()
+    /// On cellular with no Wi-Fi, which changes what a dead loopback means.
+    private(set) var isCellularOnly = false
+
     /// One instance, kept: it holds the open connection to this device, and
     /// rebuilding that per location change takes seconds.
     private var onDeviceSpoofing: OnDeviceSpoofing?
@@ -53,6 +58,23 @@ final class SpoofingCoordinator {
         pairingRecords.onRecordChanged = { [weak self] in
             self?.releaseOnDeviceSession()
         }
+
+        // Re-check the loopback the moment the network changes: on cellular
+        // it only starts answering after Airplane Mode is toggled, and the
+        // app should notice that by itself rather than wait for a poll.
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let cellularOnly = path.availableInterfaces.contains { $0.type == .cellular }
+                && !path.availableInterfaces.contains { $0.type == .wifi }
+            Task { @MainActor in
+                guard let self else { return }
+                self.isCellularOnly = cellularOnly
+                // Deliberately not closing the session: that would end a
+                // spoof in force the moment you walk off Wi-Fi. A connection
+                // the change really broke is rebuilt on the next use.
+                await self.refreshLoopback()
+            }
+        }
+        pathMonitor.start(queue: .global(qos: .utility))
     }
 
     var route: Route {
@@ -63,7 +85,13 @@ final class SpoofingCoordinator {
         if client.canSpoof { return .companion }
 
         if pairingRecords.hasRecord, !isLoopbackReachable {
-            return .unavailable("A pairing record is imported, but nothing is answering at \(loopbackAddress). Switch on StosVPN or LocalDevVPN, or connect the Mac companion.")
+            if isCellularOnly {
+                // SideStore documents the same thing for LocalDevVPN and
+                // StosVPN: started on cellular alone, the VPN does not route
+                // back to the phone until Airplane Mode is toggled once.
+                return .unavailable("On cellular, iOS only connects the VPN back to this phone after one step: with LocalDevVPN (or StosVPN) switched on, turn Airplane Mode on, then off again. This app reconnects by itself as soon as you do.")
+            }
+            return .unavailable("Nothing is answering at \(loopbackAddress). Switch on LocalDevVPN or StosVPN.")
         }
         return .unavailable(client.unavailableReason
             ?? "Plug into the Mac and click Set Up iPhone Spoofing in the companion, or open the companion on this Wi-Fi.")
