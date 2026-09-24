@@ -91,39 +91,58 @@ final class OnDeviceSpoofing {
         self.loopbackAddress = loopbackAddress
     }
 
-    /// Whether the loopback VPN is up and remotepairingd is answering through it.
+    /// Whether anything answers at the loopback address, and what happened.
     ///
-    /// Worth its own check: without it every failure below looks the same, and
-    /// the commonest cause by far is simply that the VPN is switched off.
+    /// A plain BSD socket, the same kind the Rust tunnel connects with. The
+    /// check used to be an NWConnection, which applies iOS's per-app network
+    /// policy and parks in `.waiting` on cellular — so it reported the VPN
+    /// as down on cellular while the real connection would have gone through.
     func isLoopbackReachable() async -> Bool {
-        await withCheckedContinuation { continuation in
-            let connection = NWConnection(
-                host: NWEndpoint.Host(loopbackAddress),
-                port: NWEndpoint.Port(rawValue: Self.pairingPort) ?? 49152,
-                using: .tcp)
+        let address = loopbackAddress
+        let port = Self.pairingPort
+        let result = await Task.detached(priority: .userInitiated) {
+            Self.probe(address: address, port: port)
+        }.value
+        lastProbe = result.detail
+        return result.reachable
+    }
 
-            let finished = OnceFlag()
-            let settle: @Sendable (Bool) -> Void = { reachable in
-                guard finished.claim() else { return }
-                connection.cancel()
-                continuation.resume(returning: reachable)
-            }
+    /// What the last reachability probe saw, for diagnostics.
+    private(set) var lastProbe = "not run"
 
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready: settle(true)
-                case .failed, .cancelled: settle(false)
-                case .waiting: settle(false)
-                default: break
-                }
-            }
-            connection.start(queue: .global(qos: .userInitiated))
+    nonisolated static func probe(address: String, port: UInt16) -> (reachable: Bool, detail: String) {
+        var target = sockaddr_in()
+        target.sin_family = sa_family_t(AF_INET)
+        target.sin_port = port.bigEndian
+        target.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        guard inet_pton(AF_INET, address, &target.sin_addr) == 1 else {
+            return (false, "\(address) is not a valid address")
+        }
 
-            Task {
-                try? await Task.sleep(for: .seconds(3))
-                settle(false)
+        let descriptor = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
+        guard descriptor >= 0 else { return (false, "socket: \(String(cString: strerror(errno)))") }
+        defer { close(descriptor) }
+        _ = fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL, 0) | O_NONBLOCK)
+
+        let connected = withUnsafePointer(to: &target) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
         }
+        if connected == 0 { return (true, "connected") }
+        guard errno == EINPROGRESS else {
+            return (false, "connect: \(String(cString: strerror(errno)))")
+        }
+
+        var waiting = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
+        let ready = poll(&waiting, 1, 3000)
+        guard ready > 0 else {
+            return (false, ready == 0 ? "timed out after 3 s" : "poll: \(String(cString: strerror(errno)))")
+        }
+        var failure: Int32 = 0
+        var length = socklen_t(MemoryLayout<Int32>.size)
+        getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &failure, &length)
+        return failure == 0 ? (true, "connected") : (false, String(cString: strerror(failure)))
     }
 
     /// Sets the coordinate the whole device reports.
@@ -178,9 +197,8 @@ final class OnDeviceSpoofing {
         guard FileManager.default.fileExists(atPath: pairingRecordURL.path) else {
             throw Failure.noPairingRecord
         }
-        guard await isLoopbackReachable() else {
-            throw Failure.noLoopback(loopbackAddress)
-        }
+        // No pre-check here: the tunnel's own connect reports the real
+        // error, which a probe can only guess at.
 
         var partial = Session()
         // Anything built before a throw still has to be released; success
@@ -233,19 +251,6 @@ final class OnDeviceSpoofing {
         var address = try socketAddress()
         try withUnsafePointer(to: &address) { pointer in
             try pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { try body($0) }
-        }
-    }
-
-    /// Guards a continuation so it can only be resumed once.
-    private final class OnceFlag: @unchecked Sendable {
-        private let lock = NSLock()
-        private var done = false
-
-        func claim() -> Bool {
-            lock.lock(); defer { lock.unlock() }
-            if done { return false }
-            done = true
-            return true
         }
     }
 

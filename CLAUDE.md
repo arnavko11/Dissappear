@@ -71,8 +71,11 @@ before theorising.
 **On cellular the VPN needs an Airplane Mode toggle.** Started on cellular
 alone, LocalDevVPN/StosVPN do not route 10.7.0.1 back to the phone until
 Airplane Mode is switched on and off once (SideStore's own docs say so). No
-app can toggle it; `SpoofingCoordinator` spots cellular-only + dead loopback,
-says exactly that, and re-checks on every network change.
+app can toggle it. The loopback probe is a plain BSD socket (as the Rust
+connect is): an NWConnection probe applies per-app network policy, parked in
+`.waiting` on cellular and called a working VPN dead. And the probe never
+gates an attempt when no Mac is available — the real connect reports the
+real error.
 
 The app keeps itself alive in the background with location updates while
 spoofing on-device: suspended, its connection dies and the spoof ends.

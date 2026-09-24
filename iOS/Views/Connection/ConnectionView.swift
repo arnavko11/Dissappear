@@ -27,7 +27,7 @@ struct ConnectionView: View {
                 if pairingRecords.hasRecord {
                     LabeledContent("Pairing Record", value: "Imported")
                     LabeledContent("Loopback VPN") {
-                        Text(spoofing.isLoopbackReachable ? "Connected" : "Not running")
+                        Text(spoofing.isLoopbackReachable ? "Connected" : "Not answering")
                             .foregroundStyle(spoofing.isLoopbackReachable ? .secondary : Color.orange)
                     }
                     Button("Replace Pairing Record…") { isImportingRecord = true }
@@ -127,7 +127,8 @@ struct ConnectionView: View {
             "iOS \(UIDevice.current.systemVersion), \(UIDevice.current.model)",
             "Route: \(spoofing.routeName)",
             "Unavailable reason: \(spoofing.unavailableReason ?? "none")",
-            "Loopback: \(spoofing.loopbackAddress):\(OnDeviceSpoofing.pairingPort) reachable=\(spoofing.isLoopbackReachable) cellularOnly=\(spoofing.isCellularOnly)",
+            "Loopback: \(spoofing.loopbackAddress):\(OnDeviceSpoofing.pairingPort) reachable=\(spoofing.isLoopbackReachable) probe=\(spoofing.loopbackProbe) cellularOnly=\(spoofing.isCellularOnly)",
+            "VPN interfaces: \(spoofing.tunnelInterfaces)",
             "Pairing record: \(pairingRecords.hasRecord ? "present" : "none"), keys: \(pairingRecords.recordKeys.joined(separator: ", "))",
             "Record pick-up failure: \(pairingRecords.lastPickUpFailure ?? "none")",
             "Mac: \(macDescription), connected=\(client.isConnected), ready=\(client.status?.ready ?? false)",
