@@ -40,6 +40,30 @@ final class SpoofingCoordinator {
         }
     }
 
+    /// What the last loopback probe saw, for diagnostics.
+    private(set) var loopbackProbe = "not run"
+
+    /// VPN-style interfaces and their IPv4 addresses — enough to tell whether
+    /// LocalDevVPN/StosVPN is actually up, without any private data.
+    var tunnelInterfaces: String {
+        var found: [String] = []
+        var pointer: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&pointer) == 0, let first = pointer else { return "unknown" }
+        defer { freeifaddrs(pointer) }
+        for interface in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let name = String(cString: interface.pointee.ifa_name)
+            guard name.hasPrefix("utun") || name.hasPrefix("ipsec"),
+                  let address = interface.pointee.ifa_addr,
+                  address.pointee.sa_family == UInt8(AF_INET) else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            if getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count),
+                           nil, 0, NI_NUMERICHOST) == 0 {
+                found.append("\(name)=\(String(cString: host))")
+            }
+        }
+        return found.isEmpty ? "none" : found.joined(separator: ", ")
+    }
+
     private let pathMonitor = NWPathMonitor()
     /// On cellular with no Wi-Fi, which changes what a dead loopback means.
     private(set) var isCellularOnly = false
@@ -78,21 +102,14 @@ final class SpoofingCoordinator {
     }
 
     var route: Route {
-        // On device only when it can actually work. A pairing record with no
-        // loopback VPN running used to win anyway, which quietly switched off
-        // a Mac that was sitting there working.
+        // On device when the loopback answers; the Mac when it does not and
+        // the Mac is there to use.
         if pairingRecords.hasRecord, isLoopbackReachable { return .onDevice }
         if client.canSpoof { return .companion }
-
-        if pairingRecords.hasRecord, !isLoopbackReachable {
-            if isCellularOnly {
-                // SideStore documents the same thing for LocalDevVPN and
-                // StosVPN: started on cellular alone, the VPN does not route
-                // back to the phone until Airplane Mode is toggled once.
-                return .unavailable("On cellular, iOS only connects the VPN back to this phone after one step: with LocalDevVPN (or StosVPN) switched on, turn Airplane Mode on, then off again. This app reconnects by itself as soon as you do.")
-            }
-            return .unavailable("Nothing is answering at \(loopbackAddress). Switch on LocalDevVPN or StosVPN.")
-        }
+        // With no Mac, a record means the phone should try by itself anyway.
+        // The probe can be wrong — it was on cellular — and a real attempt
+        // either works or reports the actual error instead of a guess.
+        if pairingRecords.hasRecord { return .onDevice }
         return .unavailable(client.unavailableReason
             ?? "Plug into the Mac and click Set Up iPhone Spoofing in the companion, or open the companion on this Wi-Fi.")
     }
@@ -150,8 +167,12 @@ final class SpoofingCoordinator {
                 lastFailure = nil
                 current = Spoofed(latitude: latitude, longitude: longitude, name: name)
             } catch {
-                lastOnDeviceFailure = error.localizedDescription
-                lastFailure = error.localizedDescription
+                var message = error.localizedDescription
+                if isCellularOnly {
+                    message += "\n\nOn cellular: with the VPN switched on, turn Airplane Mode on and off once, then try again."
+                }
+                lastOnDeviceFailure = message
+                lastFailure = message
             }
         case .companion:
             if await client.setLocation(latitude: latitude, longitude: longitude, name: name) {
@@ -261,7 +282,9 @@ final class SpoofingCoordinator {
             isLoopbackReachable = false
             return
         }
-        isLoopbackReachable = await onDevice().isLoopbackReachable()
+        let spoofer = onDevice()
+        isLoopbackReachable = await spoofer.isLoopbackReachable()
+        loopbackProbe = spoofer.lastProbe
         lastLoopbackCheck = .now
     }
 
