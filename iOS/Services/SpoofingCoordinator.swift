@@ -65,6 +65,53 @@ final class SpoofingCoordinator {
     }
 
     private let pathMonitor = NWPathMonitor()
+
+    // MARK: Holding the connection
+
+    /// The location last put on the device, by a spoof or a route point.
+    private var lastApplied: Spoofed?
+    private var lastPushAt: Date?
+    private var holdTask: Task<Void, Never>?
+    /// The held connection died, and could not be reopened (on cellular it
+    /// cannot be). Cleared by the next spoof that gets through.
+    private(set) var heldConnectionLost = false
+
+    /// Re-sends the current location every 4 seconds, as StikDebug does.
+    ///
+    /// iOS only lets the on-device connection be opened on Wi-Fi; one opened
+    /// there keeps working on cellular, but an idle one lapses, and the next
+    /// change then needs a new connection that cellular refuses. Keeping it
+    /// busy — with the app kept alive by `BackgroundKeepAlive` — is what lets
+    /// a spoof started at home be moved around anywhere.
+    private func startHolding() {
+        holdTask?.cancel()
+        heldConnectionLost = false
+        holdTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(4))
+                guard let self else { return }
+                guard !Task.isCancelled, !self.isWorking, self.hasPushedOnDevice,
+                      let spot = self.lastApplied else { continue }
+                // A route is streaming points already; do not fight it.
+                if let lastPushAt = self.lastPushAt, Date.now.timeIntervalSince(lastPushAt) < 3 { continue }
+                do {
+                    try await self.onDevice().spoof(latitude: spot.latitude, longitude: spot.longitude)
+                } catch {
+                    // Stop rather than retry every 4 s: each failed open blocks
+                    // for seconds. Coming back to Wi-Fi reopens it.
+                    self.heldConnectionLost = true
+                    self.lastOnDeviceFailure = error.localizedDescription
+                    self.holdTask = nil
+                    return
+                }
+            }
+        }
+    }
+
+    private func stopHolding() {
+        holdTask?.cancel()
+        holdTask = nil
+    }
     /// On cellular with no Wi-Fi, which changes what a dead loopback means.
     private(set) var isCellularOnly = false
 
@@ -92,6 +139,12 @@ final class SpoofingCoordinator {
             Task { @MainActor in
                 guard let self else { return }
                 self.isCellularOnly = cellularOnly
+                // Back on Wi-Fi with a spoof whose connection was lost: open
+                // a new one now, while iOS will allow it, so it is held again
+                // before the phone goes back out.
+                if !cellularOnly, self.heldConnectionLost, let spot = self.lastApplied {
+                    await self.spoof(latitude: spot.latitude, longitude: spot.longitude, name: spot.name)
+                }
                 // Deliberately not closing the session: that would end a
                 // spoof in force the moment you walk off Wi-Fi. A connection
                 // the change really broke is rebuilt on the next use.
@@ -163,13 +216,15 @@ final class SpoofingCoordinator {
                 try await onDevice().spoof(latitude: latitude, longitude: longitude)
                 hasPushedOnDevice = true
                 keepAlive.start()
+                lastApplied = Spoofed(latitude: latitude, longitude: longitude, name: name)
+                startHolding()
                 lastOnDeviceFailure = nil
                 lastFailure = nil
                 current = Spoofed(latitude: latitude, longitude: longitude, name: name)
             } catch {
                 var message = error.localizedDescription
                 if isCellularOnly {
-                    message += "\n\nOn cellular: with the VPN switched on, turn Airplane Mode on and off once, then try again."
+                    message += "\n\niOS only lets this connection be opened on Wi-Fi. Spoof once while on Wi-Fi: the app then holds the connection, and you can change location anywhere — cellular included — for as long as it stays open."
                 }
                 lastOnDeviceFailure = message
                 lastFailure = message
@@ -196,6 +251,7 @@ final class SpoofingCoordinator {
                 try await onDevice().clear()
                 hasPushedOnDevice = false
                 keepAlive.stop()
+                stopHolding()
                 lastOnDeviceFailure = nil
                 current = nil
             } catch {
@@ -268,6 +324,9 @@ final class SpoofingCoordinator {
             try? await onDevice().spoof(latitude: latitude, longitude: longitude)
             hasPushedOnDevice = true
             keepAlive.start()
+            lastApplied = Spoofed(latitude: latitude, longitude: longitude, name: name)
+            lastPushAt = .now
+            if holdTask == nil { startHolding() }
         case .companion:
             await client.push(latitude: latitude, longitude: longitude, name: name)
         case .unavailable:
@@ -310,6 +369,7 @@ final class SpoofingCoordinator {
     /// Lets the device connection go, for when the record changes or the app
     /// is put away.
     func releaseOnDeviceSession() {
+        stopHolding()
         onDeviceSpoofing?.closeSession()
         onDeviceSpoofing = nil
         keepAlive.stop()
