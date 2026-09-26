@@ -79,6 +79,18 @@ away from Wi-Fi, the loop stops (each failed open blocks for seconds) and the
 path monitor re-opens it the moment Wi-Fi returns. The loopback probe is a
 plain BSD socket: an NWConnection probe parked in `.waiting` on cellular.
 
+`SpoofWarnings` posts a notification once per stretch on cellular (and when
+Low Power Mode comes on) while a spoof is held: swiping the app away or Low
+Power Mode suspending it ends the spoof, and cellular cannot reopen it.
+
+**Anisette v3 is a protocol, not a request.** `RemoteAnisette` implements it
+from anisette-v3-server's source: `/v3/client_info`; provision once over the
+`/v3/provisioning_session` WebSocket (identifier → spim from Apple's
+midStartProvisioning → cpim → ptm/tk from midFinishProvisioning → adi_pb);
+then `/v3/get_headers`, re-provisioning on `GetHeadersError`. The old code
+skipped provisioning, so no v3 server ever worked. Discovery picks a server
+only after a full header exchange succeeds. Not yet run against a live server.
+
 **Phone↔Mac pairing is automatic.** `POST /pair` is the only unauthenticated
 endpoint; the Mac shows Allow/Don't Allow and returns the code. No address or
 code UI exists on either side — don't add it back.

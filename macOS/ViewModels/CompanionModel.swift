@@ -1596,14 +1596,4 @@ enum Preferences {
         guard !trimmed.isEmpty, let url = URL(string: trimmed), url.scheme != nil else { return nil }
         return url
     }
-
-    /// Stable 16-byte identifier the v3 anisette protocol expects.
-    static var anisetteIdentifier: String {
-        if let stored = defaults.string(forKey: "anisetteIdentifier") { return stored }
-        var bytes = [UInt8](repeating: 0, count: 16)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        let encoded = Data(bytes).base64EncodedString()
-        defaults.set(encoded, forKey: "anisetteIdentifier")
-        return encoded
-    }
 }
