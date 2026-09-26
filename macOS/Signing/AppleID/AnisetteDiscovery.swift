@@ -41,21 +41,17 @@ struct AnisetteDiscovery {
         return parsed.isEmpty ? Self.fallbacks : parsed
     }
 
-    /// Returns the first server that answers a real anisette request.
+    /// Returns the first server that actually produces anisette headers.
+    ///
+    /// Answering at all is not enough — the old check accepted any reply
+    /// below 500, a 404 included, so it could pick a server that had never
+    /// worked. This runs the real exchange (provisioning included, which the
+    /// server keeps), so the one chosen is known to work.
     func firstReachable() async -> Server? {
         for server in await available() {
-            if await responds(server) { return server }
+            guard let url = URL(string: server.address) else { continue }
+            if (try? await RemoteAnisette(server: url).headers()) != nil { return server }
         }
         return nil
-    }
-
-    private func responds(_ server: Server) async -> Bool {
-        guard let base = URL(string: server.address) else { return false }
-        var request = URLRequest(url: base)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 6
-        guard let (_, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse else { return false }
-        return (200..<500).contains(http.statusCode)
     }
 }

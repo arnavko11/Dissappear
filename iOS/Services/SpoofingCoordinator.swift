@@ -65,6 +65,9 @@ final class SpoofingCoordinator {
     }
 
     private let pathMonitor = NWPathMonitor()
+    private let warnings = SpoofWarnings()
+    /// Warned once per stretch on cellular, not on every location change.
+    private var warnedForCellular = false
 
     // MARK: Holding the connection
 
@@ -138,6 +141,13 @@ final class SpoofingCoordinator {
                 && !path.availableInterfaces.contains { $0.type == .wifi }
             Task { @MainActor in
                 guard let self else { return }
+                // Moving onto cellular while holding a spoof: this is when
+                // swiping the app away or Low Power Mode would cost it.
+                if !cellularOnly { self.warnedForCellular = false }
+                if cellularOnly, self.hasPushedOnDevice, !self.warnedForCellular {
+                    self.warnedForCellular = true
+                    self.warnings.cellularStarted()
+                }
                 self.isCellularOnly = cellularOnly
                 // Back on Wi-Fi with a spoof whose connection was lost: open
                 // a new one now, while iOS will allow it, so it is held again
@@ -218,6 +228,12 @@ final class SpoofingCoordinator {
                 keepAlive.start()
                 lastApplied = Spoofed(latitude: latitude, longitude: longitude, name: name)
                 startHolding()
+                warnings.requestPermission()
+                warnings.watchLowPower { [weak self] in self?.hasPushedOnDevice ?? false }
+                if isCellularOnly, !warnedForCellular {
+                    warnedForCellular = true
+                    warnings.cellularStarted()
+                }
                 lastOnDeviceFailure = nil
                 lastFailure = nil
                 current = Spoofed(latitude: latitude, longitude: longitude, name: name)

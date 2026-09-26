@@ -20,7 +20,7 @@ struct AnisetteProvider {
 
     func headers() async throws -> [String: String] {
         if let serverURL {
-            return try await remoteHeaders(from: serverURL)
+            return Self.canonical(try await RemoteAnisette(server: serverURL).headers())
         }
 
         let local = try localHeaders()
@@ -70,32 +70,15 @@ struct AnisetteProvider {
 
     // MARK: - Remote
 
-    /// Fetches anisette from a server the user chose. Tries the v3 endpoint
-    /// first, then the plain endpoint older servers expose.
-    private func remoteHeaders(from server: URL) async throws -> [String: String] {
-        let session = URLSession(configuration: .ephemeral)
-
-        var request = URLRequest(url: server.appendingPathComponent("v3/get_headers"))
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try? JSONSerialization.data(
-            withJSONObject: ["identifier": Preferences.anisetteIdentifier])
-
-        if let (data, response) = try? await session.data(for: request),
-           (response as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) ?? false,
-           let headers = Self.parse(data) {
-            return headers
+    /// Servers spell one header two ways (`X-MMe-Client-Info` from v1,
+    /// `X-Mme-Client-Info` elsewhere). Lookups are case-sensitive, so the
+    /// client info silently went missing; one spelling from here on.
+    static func canonical(_ headers: [String: String]) -> [String: String] {
+        var result: [String: String] = [:]
+        for (key, value) in headers {
+            result[key.lowercased() == "x-mme-client-info" ? "X-Mme-Client-Info" : key] = value
         }
-
-        let (data, response) = try await session.data(from: server)
-        guard (response as? HTTPURLResponse).map({ (200...299).contains($0.statusCode) }) ?? false,
-              let headers = Self.parse(data) else {
-            throw AppleIDError.anisetteUnavailable("""
-            The anisette server at \(server.absoluteString) did not return usable data. \
-            Check the address, or clear it to try this Mac's own anisette.
-            """)
-        }
-        return headers
+        return result
     }
 
     /// Accepts both the flat header dictionary and the v3 envelope.
