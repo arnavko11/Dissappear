@@ -114,7 +114,7 @@ final class OnDeviceSpoofing {
     nonisolated static func meaning(of detail: String) -> String {
         let lower = detail.lowercased()
         if lower.contains("refused") {
-            return "The VPN is routing, but the iPhone's pairing service refused: iOS only accepts new connections to it on Wi-Fi. Spoof once on Wi-Fi and the app holds that connection — after that you can change location on cellular too, as long as the app keeps running."
+            return "The VPN is routing, but the iPhone's pairing service refused: on cellular iOS will not accept a new connection. It will on Wi-Fi or in Airplane Mode — open it there, and it stays open on cellular afterwards."
         }
         if lower.contains("timed out") || lower.contains("unreachable") || lower.contains("no route") {
             return "Nothing is routing to that address: the VPN is off or not passing traffic. Switch LocalDevVPN/StosVPN off and on, or toggle Airplane Mode with it on."

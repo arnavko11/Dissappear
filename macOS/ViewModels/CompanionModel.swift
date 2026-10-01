@@ -710,12 +710,13 @@ extension CompanionModel {
         activity = "Looking for an anisette server"
         defer { if !isBusy { activity = nil } }
 
-        guard let server = await AnisetteDiscovery().firstReachable() else {
+        let found = await AnisetteDiscovery().firstWorking()
+        guard let server = found.server else {
             error = CompanionError(
-                title: "No Anisette Server Answered",
-                details: "None of the published servers could be reached.",
-                recommendedAction: "You do not need one to spoof a location. It is only for Build ▸ Apple ID Signing; installing with a provisioning profile from Xcode needs none of this.",
-                technicalDetails: "https://servers.sidestore.io/servers.json")
+                title: "No Anisette Server Worked",
+                details: "Every published server was tried with a full anisette exchange, and none completed it.",
+                recommendedAction: "Copy Details and send them — each line says which step failed on which server. You do not need anisette to spoof a location; it is only for Build ▸ Apple ID Signing.",
+                technicalDetails: found.failures.joined(separator: "\n"))
             return
         }
         Preferences.anisetteServerString = server.address
