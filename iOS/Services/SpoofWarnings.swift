@@ -32,13 +32,20 @@ final class SpoofWarnings: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func cellularStarted() {
-        var body = "Keep Dissappear running: don't swipe it away in the app switcher. On cellular the connection can't be reopened until you're back on Wi-Fi."
+        var body = "Keep Dissappear running: don't swipe it away in the app switcher. If the connection drops, it can only be reopened on Wi-Fi or in Airplane Mode."
         if ProcessInfo.processInfo.isLowPowerModeEnabled {
             body += " Low Power Mode is on — turn it off, or it may suspend the app."
         } else {
             body += " Keep Low Power Mode off."
         }
         post(id: "cellular", title: "On cellular — your spoof depends on this app", body: body)
+    }
+
+    /// The connection opened in Airplane Mode; it is safe to leave it now.
+    func connectedOffline() {
+        post(id: "offline",
+             title: "Connected — turn Airplane Mode off",
+             body: "Your location is set. The connection stays open when you go back to cellular, as long as Dissappear keeps running.")
     }
 
     private func post(id: String, title: String, body: String) {

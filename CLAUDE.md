@@ -79,6 +79,12 @@ away from Wi-Fi, the loop stops (each failed open blocks for seconds) and the
 path monitor re-opens it the moment Wi-Fi returns. The loopback probe is a
 plain BSD socket: an NWConnection probe parked in `.waiting` on cellular.
 
+New connections also open in **Airplane Mode** (StikDebug/SideStore document
+offline use), and survive turning it off. A change refused on cellular is kept
+as `pendingSpoof` and sent automatically when the path monitor sees no radios
+(or Wi-Fi), with a notification to turn Airplane Mode off again. Unverified on
+hardware — if it fails, the probe line in the error says which half.
+
 `SpoofWarnings` posts a notification once per stretch on cellular (and when
 Low Power Mode comes on) while a spoof is held: swiping the app away or Low
 Power Mode suspending it ends the spoof, and cellular cannot reopen it.
@@ -87,9 +93,11 @@ Power Mode suspending it ends the spoof, and cellular cannot reopen it.
 from anisette-v3-server's source: `/v3/client_info`; provision once over the
 `/v3/provisioning_session` WebSocket (identifier → spim from Apple's
 midStartProvisioning → cpim → ptm/tk from midFinishProvisioning → adi_pb);
-then `/v3/get_headers`, re-provisioning on `GetHeadersError`. The old code
-skipped provisioning, so no v3 server ever worked. Discovery picks a server
-only after a full header exchange succeeds. Not yet run against a live server.
+then `/v3/get_headers`, re-provisioning on `GetHeadersError`. Apple-side
+requests match the PyPI `anisette` package (lookup, plist bodies, headers).
+If the saved server fails, `AnisetteProvider` fails over to the next working
+one and saves it; when none works, every server's failure reason is in the
+error's details. This sandbox cannot reach the servers or Apple.
 
 **Phone↔Mac pairing is automatic.** `POST /pair` is the only unauthenticated
 endpoint; the Mac shows Allow/Don't Allow and returns the code. No address or

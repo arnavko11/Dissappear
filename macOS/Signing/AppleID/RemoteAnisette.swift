@@ -168,6 +168,8 @@ struct RemoteAnisette {
         for (key, value) in baseHeaders(provisioning) { request.setValue(value, forHTTPHeaderField: key) }
         request.setValue(provisioning.userAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        // As AuthKit sends it (and the maintained Python client copies).
+        request.setValue("Setup", forHTTPHeaderField: "X-Apple-Client-App-Name")
         if let body {
             let envelope: [String: Any] = ["Header": [String: Any](), "Request": body]
             request.httpBody = try PropertyListSerialization.data(fromPropertyList: envelope, format: .xml, options: 0)

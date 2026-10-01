@@ -66,6 +66,11 @@ final class SpoofingCoordinator {
 
     private let pathMonitor = NWPathMonitor()
     private let warnings = SpoofWarnings()
+    /// In Airplane Mode (no cellular, no Wi-Fi).
+    private(set) var isOffline = false
+    /// A change refused on cellular, sent automatically once iOS will open
+    /// a connection again — in Airplane Mode or on Wi-Fi.
+    private(set) var pendingSpoof: Spoofed?
     /// Warned once per stretch on cellular, not on every location change.
     private var warnedForCellular = false
 
@@ -139,6 +144,9 @@ final class SpoofingCoordinator {
         pathMonitor.pathUpdateHandler = { [weak self] path in
             let cellularOnly = path.availableInterfaces.contains { $0.type == .cellular }
                 && !path.availableInterfaces.contains { $0.type == .wifi }
+            // Airplane Mode: neither radio. New connections open here too —
+            // StikDebug and SideStore document enabling offline this way.
+            let offline = !path.availableInterfaces.contains { $0.type == .cellular || $0.type == .wifi }
             Task { @MainActor in
                 guard let self else { return }
                 // Moving onto cellular while holding a spoof: this is when
@@ -149,6 +157,17 @@ final class SpoofingCoordinator {
                     self.warnings.cellularStarted()
                 }
                 self.isCellularOnly = cellularOnly
+                self.isOffline = offline
+                // A spoof refused on cellular, waiting for Airplane Mode or
+                // Wi-Fi: send it now that iOS will let the connection open.
+                if !cellularOnly, let waiting = self.pendingSpoof {
+                    self.pendingSpoof = nil
+                    await self.spoof(latitude: waiting.latitude, longitude: waiting.longitude, name: waiting.name)
+                    if offline, self.lastFailure == nil {
+                        self.warnings.connectedOffline()
+                    }
+                    return
+                }
                 // Back on Wi-Fi with a spoof whose connection was lost: open
                 // a new one now, while iOS will allow it, so it is held again
                 // before the phone goes back out.
@@ -240,7 +259,8 @@ final class SpoofingCoordinator {
             } catch {
                 var message = error.localizedDescription
                 if isCellularOnly {
-                    message += "\n\niOS only lets this connection be opened on Wi-Fi. Spoof once while on Wi-Fi: the app then holds the connection, and you can change location anywhere — cellular included — for as long as it stays open."
+                    pendingSpoof = Spoofed(latitude: latitude, longitude: longitude, name: name)
+                    message = "On cellular, iOS will not open a new connection to this phone — but it will in Airplane Mode.\n\nTurn Airplane Mode on (leave the VPN on). This app connects and moves you by itself; it will notify you. Then turn Airplane Mode off — the connection stays open on cellular.\n\n" + message
                 }
                 lastOnDeviceFailure = message
                 lastFailure = message
@@ -259,6 +279,7 @@ final class SpoofingCoordinator {
 
     func clear() async {
         isCompanionPlayingRoute = false
+        pendingSpoof = nil
         isWorking = true
         defer { isWorking = false }
         switch route {

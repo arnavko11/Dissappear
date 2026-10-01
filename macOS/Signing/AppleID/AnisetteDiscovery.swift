@@ -41,17 +41,28 @@ struct AnisetteDiscovery {
         return parsed.isEmpty ? Self.fallbacks : parsed
     }
 
-    /// Returns the first server that actually produces anisette headers.
+    /// Returns the first server that actually produces anisette headers,
+    /// and why each one before it did not.
     ///
     /// Answering at all is not enough — the old check accepted any reply
-    /// below 500, a 404 included, so it could pick a server that had never
-    /// worked. This runs the real exchange (provisioning included, which the
-    /// server keeps), so the one chosen is known to work.
-    func firstReachable() async -> Server? {
-        for server in await available() {
+    /// below 500, a 404 included. This runs the real exchange (provisioning
+    /// included, which the server keeps), so the one chosen is known to work,
+    /// and the reasons say what is wrong when none does.
+    func firstWorking(excluding skipped: Set<String> = []) async -> (server: Server?, headers: [String: String]?, failures: [String]) {
+        var failures: [String] = []
+        for server in await available() where !skipped.contains(server.address) {
             guard let url = URL(string: server.address) else { continue }
-            if (try? await RemoteAnisette(server: url).headers()) != nil { return server }
+            do {
+                let headers = try await RemoteAnisette(server: url).headers()
+                return (server, headers, failures)
+            } catch {
+                failures.append("\(server.name) (\(server.address)): \(error.localizedDescription)")
+            }
         }
-        return nil
+        return (nil, nil, failures)
+    }
+
+    func firstReachable() async -> Server? {
+        await firstWorking().server
     }
 }

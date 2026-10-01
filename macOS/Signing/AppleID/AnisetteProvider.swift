@@ -20,7 +20,20 @@ struct AnisetteProvider {
 
     func headers() async throws -> [String: String] {
         if let serverURL {
-            return Self.canonical(try await RemoteAnisette(server: serverURL).headers())
+            do {
+                return Self.canonical(try await RemoteAnisette(server: serverURL).headers())
+            } catch let chosenFailure {
+                // Public servers come and go. Rather than fail the sign-in
+                // on the one saved, move to the next that works, and keep it.
+                let found = await AnisetteDiscovery().firstWorking(excluding: [serverURL.absoluteString])
+                if let server = found.server, let headers = found.headers {
+                    Preferences.anisetteServerString = server.address
+                    return Self.canonical(headers)
+                }
+                let reasons = (["\(serverURL.absoluteString): \(chosenFailure.localizedDescription)"] + found.failures)
+                    .joined(separator: "\n")
+                throw AppleIDError.anisetteUnavailable("No anisette server worked.\n\(reasons)")
+            }
         }
 
         let local = try localHeaders()
